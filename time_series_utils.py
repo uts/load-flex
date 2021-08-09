@@ -8,12 +8,11 @@ from datetime import timedelta, datetime
 from typing import Type
 from dataclasses import dataclass
 
+
 @dataclass
-class Scheduler(ABC, BaseModel):
+class Scheduler:
     start_dt: datetime
     interval: timedelta
-    initialised = False
-    next_event_due: datetime = None
 
     def __post_init__(self):
         self.next_event_due = self.start_dt
@@ -26,6 +25,7 @@ class Scheduler(ABC, BaseModel):
         return due
 
 
+@dataclass
 class Forecaster(ABC):
     window: timedelta
 
@@ -44,8 +44,8 @@ class PerfectForcaster(Forecaster):
         arr: pd.Series,
         start_datetime: datetime,
     ):
-        fmt = '%Y-%m-%d HH:MM'
-        end_time = start_datetime + self.foresight
+        fmt = '%Y-%m-%d %H:%M'
+        end_time = start_datetime + self.window
         return arr[start_datetime.strftime(fmt): end_time.strftime(fmt)]
 
 

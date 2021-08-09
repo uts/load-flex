@@ -8,58 +8,72 @@ from dataclasses import dataclass
 
 from time_series_utils import Forecaster
 
+
+@dataclass
 class EquipmentMetadata:
     name: str
     capital_cost: float
     operational_cost: float
 
 
+@dataclass
 class Equipment(ABC):
     metadata: EquipmentMetadata
-    dispatch_report: pd.DataFrame = None
 
     @abstractmethod
-    def energy_request(self) -> float:
+    def energy_request(self, energy) -> float:
         pass
 
 
+@dataclass
 class Storage(Equipment):
-    def __init__(
-            self,
-            metadata: EquipmentMetadata,
-            discharge_capacity: float,
-            charge_capacity: float,
-            storage_capacity: float,
-            state_of_charge: float,
-            available_energy: float,
-            round_trip_efficiency: float,
-            dispatch_report: pd.DataFrame = None,
-    ):
-        super(Storage, self).__init__(metadata, dispatch_report)
-        self.discharge_capacity = discharge_capacity
-        self.charge_capacity = charge_capacity
-        self.storage_capacity = storage_capacity
-        self.state_of_charge = state_of_charge
-        self.available_energy = available_energy
-        self.round_trip_efficiency = round_trip_efficiency
+    discharge_capacity: float
+    charge_capacity: float
+    storage_capacity: float
+    state_of_charge: float
+    round_trip_efficiency: float
+    dispatch_report: pd.DataFrame
 
-        self.discharge_limit = self.discharge_capacity
-        self.charge_limit = self.charge_capacity
+    @property
+    def available_energy(self):
+        return self.state_of_charge * self.storage_capacity
+
+    @property
+    def available_storage(self):
+        return self.storage_capacity * (1 - self.state_of_charge)
 
     @abstractmethod
-    def update_state(self):
+    def update_state(self, energy):
         pass
 
 
 class Battery(Storage):
-    def update_state(self):
-        pass
+    def update_state(self, energy: float):
+        if energy > 0:
+            # Apply efficiency on charge only
+            energy = self.round_trip_efficiency * energy
+        self.state_of_charge += energy / self.storage_capacity
 
-    def energy_request(self) -> float:
-
+    def energy_request(self, energy) -> float:
+        # Negative energy indicates discharge
+        # Positive energy indicate charge
+        if energy < 0:
+            energy_exchange = - min(
+                abs(energy),
+                self.discharge_capacity,
+                self.available_energy
+            )
+        else:
+            energy_exchange = min(
+                energy,
+                self.available_storage,
+                self.charge_capacity
+            )
+        self.update_state(energy_exchange)
         return energy_exchange
 
 
+@dataclass
 class Dispatcher(ABC):
     demand_arr: Union[List[Number], np.ndarray, pd.Series]
     equipment: List[Type[Equipment]]
@@ -72,7 +86,6 @@ class Dispatcher(ABC):
 
 
 class BasicDispatcher(Dispatcher):
-
     def dispatch(self):
         self.remaining_demand_arr = self.demand_arr.to_numpy()
         for plant in self.equipment:
