@@ -51,7 +51,7 @@ class SimpleBatteryController(Controller):
         proposed_limit = np.flip(sorted_arr)[index]
         self.peak_threshold = max(self.peak_threshold, proposed_limit)
 
-    def dispatch_proposal(self, demand: float) ->float :
+    def dispatch_proposal(self, demand: float) -> float:
         proposal = self.peak_threshold - demand
         return proposal
 
