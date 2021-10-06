@@ -1,64 +1,85 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
-from typing import Union
-from abc import ABC, abstractmethod
+from datetime import timedelta, datetime
+from typing import Union, Dict
+from abc import abstractmethod, ABC
 
 import pandas as pd
 import numpy as np
-from ts_tariffs.sites import Validator, MeterData, ElectricityMeterData
+from ts_tariffs.sites import Validator, ElectricityMeterData, MeterData
 
 
 @dataclass
-class ElectroFlexMeter(ElectricityMeterData):
+class DispatchFlexMeter(ABC):
+    dispatch_ts: pd.DataFrame = None
+    flexed_meter_ts: pd.DataFrame = None
+
     @abstractmethod
-    def adjusted_meter_ts(
+    def calculate_flexed_demand(
             self,
             name: str,
-            updated_meter_data: np.ndarray
-    ) -> ElectroFlexMeter:
+    ):
         pass
+
+    def update_dispatch(
+            self,
+            dt: datetime,
+            charge: float,
+            discharge: float,
+            other: Dict[str, float] = None
+    ):
+        self.dispatch_ts['charge'].loc[dt] = charge
+        self.dispatch_ts['discharge'].loc[dt] = discharge
+        if other:
+            for key, value in other.items():
+                self.dispatch_ts[key] = value
 
 
 @dataclass
-class PowerFlexMeter(ElectroFlexMeter):
-    """ ElectricityMeterData with capability to adjust power and apparent
-    power based on change in energy demand
-
-    Assumes energy units as kWh
+class PowerFlexMeter(DispatchFlexMeter, ElectricityMeterData):
+    """
     """
 
-    def adjusted_meter_ts(
+    def __post_init__(self):
+        self.dispatch_ts = pd.DataFrame(index=self.meter_ts.index)
+        self.flexed_meter_ts = pd.DataFrame(index=self.meter_ts.index)
+
+    def calculate_flexed_demand(
             self,
             name,
-            updated_meter_data: np.ndarray
-    ) -> PowerFlexMeter:
+    ):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
         """
+        self.flexed_meter_ts = self.meter_ts.copy()
+        self.flexed_meter_ts['demand_energy'] += \
+            self.dispatch_ts['charge'] + \
+            self.dispatch_ts['discharge']
+        delta_power = self.dispatch_ts * self.sample_rate / timedelta(hours=1)
+        self.flexed_meter_ts['demand_power'] += delta_power['charge'] + delta_power['discharge']
+        self.flexed_meter_ts['demand_apparent'] += self.flexed_meter_ts['demand_power'] / self.meter_ts['power_factor']
+        
 
-        new_meter_ts = self.meter_ts.copy()
-        new_meter_ts['demand_energy'] = updated_meter_data
-        energy_diff = updated_meter_data - self.meter_ts['demand_energy']
-        power_diff = energy_diff * self.sample_rate / timedelta(hours=1)
-        new_meter_ts['demand_power'] += power_diff
-        new_meter_ts['demand_apparent'] += power_diff / self.meter_ts['power_factor']
-
-        return PowerFlexMeter(
-            name,
-            new_meter_ts,
-            self.sample_rate,
-            self.units,
-            self.sub_load_cols
-        )
+@dataclass
+class ThermalLoadProperties:
+    coefficient_of_performance: Union[float, np.ndarray]
+    charge_as: str
+    discharge_as: str
 
 
 @dataclass
-class ThermalFlexMeter(ElectroFlexMeter):
-    coefficient_of_performance: Union[float, np.ndarray]
+class ThermalLoadFlexMeter(
+    DispatchFlexMeter,
+    ThermalLoadProperties,
+    ThermalLoadProperties,
+    MeterData
+):
 
     def __post_init__(self):
+        self.dispatch_ts = pd.DataFrame(index=self.meter_ts.index)
+        self.flexed_meter_ts = pd.DataFrame(index=self.meter_ts.index)
+
         Validator.data_cols(
             self.meter_ts,
             (
@@ -72,24 +93,15 @@ class ThermalFlexMeter(ElectroFlexMeter):
         self.meter_ts['gross_mixed_electrical_thermal'] = \
             self.meter_ts['other_electrical_energy'] + self.meter_ts['equivalent_thermal_energy']
 
-    def adjusted_meter_ts(
+    def calculate_flexed_demand(
             self,
             name,
-            updated_meter_data: np.ndarray
-    ) -> ThermalFlexMeter:
+    ):
         self.meter_ts['equivalent_thermal_energy'] = updated_meter_data
         self.meter_ts['electrical_energy'] = \
             self.meter_ts['equivalent_thermal_energy'] / self.coefficient_of_performance
         self.meter_ts['gross_electrical_energy'] = \
             self.meter_ts['electrical_energy'] + self.meter_ts['other_electrical_energy']
-        return ThermalFlexMeter(
-            self.name,
-            self.meter_ts,
-            self.sample_rate,
-            self.units,
-            self.sub_load_cols,
-            self.coefficient_of_performance
-        )
 
     @classmethod
     def from_electrical_meter(

@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 from ts_tariffs.sites import ElectricityMeterData
 
-from metering import PowerFlexMeter, ThermalFlexMeter
+from metering import ThermalLoadFlexMeter, FlexMeter
+from storage import Battery, ThermalStorage
 from time_series_utils import Scheduler, Forecaster, PeakShaveTools
 from equipment import Equipment, Storage
-from storage import Battery
 
 
 @dataclass
@@ -30,13 +30,8 @@ class Controller(ABC):
     forecaster: Forecaster = None
     forecast_scheduler: Scheduler = None
     conditions: List[Conditions] = None
-    dispatch_report: pd.DataFrame = None
-    demand: ElectricityMeterData = None
+    meter: FlexMeter = None
     peak_threshold: float = 0.0
-
-    @abstractmethod
-    def update_dispatch_report(self, update):
-        pass
 
     @abstractmethod
     def dispatch(self):
@@ -48,12 +43,24 @@ class StorageController(Controller):
     equipment: Storage = None
     dispatch_on: str = None
 
+    def __post_init__(self):
+        # Initialise limits
+        if not self.peak_threshold:
+            self.set_limit(
+                self.forecaster.look_ahead(
+                    self.meter.meter_ts,
+                    self.meter.meter_ts.first_valid_index()
+                ),
+                self.equipment.available_energy
+            )
+
     @abstractmethod
     def set_limit(
             self,
             demand_forecast: Union[List[Number], np.ndarray, pd.Series],
             area: float
     ):
+        """ """
         pass
 
     def dispatch_proposal(self, demand: float) -> float:
@@ -61,19 +68,12 @@ class StorageController(Controller):
         return proposal
 
     def dispatch(self):
-        # Initialise limits
-        self.set_limit(
-            self.forecaster.look_ahead(
-                self.demand.meter_ts,
-                self.demand.meter_ts.first_valid_index()
-            ),
-            self.equipment.available_energy
-        )
-        for dt, demand in self.demand.meter_ts.iteritems():
+
+        for dt, demand in self.meter.meter_ts.iteritems():
             if self.forecast_scheduler.event_due(dt):
                 self.set_limit(
                     self.forecaster.look_ahead(
-                        self.demand.meter_ts[self.dispatch_on],
+                        self.meter.meter_ts[self.dispatch_on],
                         dt
                     ),
                     self.equipment.available_energy
@@ -81,32 +81,29 @@ class StorageController(Controller):
             dispatch = self.equipment.energy_request(
                 self.dispatch_proposal(demand[self.dispatch_on])
             )
-            self.update_dispatch_report({
-                'datetime': dt,
-                self.dispatch_on: demand,
-                f'{self.equipment.name}_charged': max(dispatch, 0),
-                f'{self.equipment.name}_discharged': min(dispatch, 0),
-                'new_net_demand': demand + dispatch,
+            reportables = {
                 'peak_threshold': self.peak_threshold,
                 **self.equipment.status()
-            })
-        self.dispatch_report.set_index('datetime', inplace=True)
-
-    def update_dispatch_report(self, update: dict):
-        if not isinstance(self.dispatch_report, pd.DataFrame):
-            self.dispatch_report = pd.DataFrame()
-        self.dispatch_report = self.dispatch_report.append(update, ignore_index=True)
+            }
+            self.meter.update_dispatch(
+                dt,
+                max(dispatch, 0.0),
+                min(dispatch, 0),
+                reportables
+            )
 
 
 @dataclass
 class SimpleBatteryController(StorageController):
+    equipment: Battery = None
+
     def set_limit(
             self,
             demand_forecast: Union[List[Number], np.ndarray, pd.Series],
             area: float
     ):
         sorted_arr = np.sort(
-            self.demand.meter_ts[self.dispatch_on].values
+            self.meter.meter_ts[self.dispatch_on].values
         )
         peak_areas = PeakShaveTools.cumulative_peak_areas(sorted_arr)
         index = PeakShaveTools.peak_area_idx(peak_areas, area)
@@ -116,7 +113,8 @@ class SimpleBatteryController(StorageController):
 
 @dataclass
 class ThermalStorageController(StorageController):
-    demand: ThermalFlexMeter = None
+    equipment: ThermalStorage = None
+    meter: ThermalLoadFlexMeter = None
     dispatch_on: str = 'equivalent_thermal_energy'
 
     def set_limit(
@@ -124,7 +122,7 @@ class ThermalStorageController(StorageController):
             demand_arr: Union[List[Number], np.ndarray, pd.Series],
             area: float
     ):
-        ts = self.demand.meter_ts.copy()
+        ts = self.meter.meter_ts.copy()
         ts.sort_values('gross_electrical_energy', inplace=True)
         ts.reset_index(inplace=True, drop=True)
 
