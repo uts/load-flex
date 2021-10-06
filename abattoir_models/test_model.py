@@ -1,11 +1,14 @@
+from datetime import timedelta
+
 from portfolio.utils.data_utils import s3BucketManager, CacheManager
 import os
 
-from ts_tariffs.sites import ElectricityMeterData, Site
+from ts_tariffs.sites import Site
 from ts_tariffs.tariffs import TariffRegime
 
-from equipment import Battery
+from storage import Battery
 from local_data.local_data import aws_credentials, project_root
+from metering import PowerFlexMeter
 
 
 bucket_str = 'race-abattoir-load-flex'
@@ -64,10 +67,11 @@ column_map = {
 
 jbs_consump_df.set_index('datetime', inplace=True)
 jbs_consump_df = jbs_consump_df.loc['2021-07-01': '2021-07-31']
-meter = ElectricityMeterData.from_dataframe(
+meter = PowerFlexMeter.from_dataframe(
     'jbs',
     jbs_consump_df,
-    column_map
+    timedelta(hours=0.5),
+    column_map,
 )
 
 jbs_tariff_regime = TariffRegime(jbs_tariff_regime_data)

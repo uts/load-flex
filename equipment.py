@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
-from pydantic import BaseModel
 import pandas as pd
 import numpy as np
-from typing import Type, List, Union
+from typing import Type, List, Union, Tuple
 from numbers import Number
 from dataclasses import dataclass
 
@@ -18,17 +17,24 @@ class EquipmentMetadata:
 
 @dataclass
 class Equipment(ABC):
-    metadata: EquipmentMetadata
+    name: str
+
+    def status(self) -> dict:
+        return {x: getattr(self, x) for x in self.report_on}
 
     @abstractmethod
     def energy_request(self, energy) -> float:
         pass
 
+    @abstractmethod
+    def update_state(self, energy):
+        pass
+
 
 @dataclass
 class Storage(Equipment):
-    discharge_capacity: float
-    charge_capacity: float
+    nominal_discharge_capacity: float
+    nominal_charge_capacity: float
     storage_capacity: float
     state_of_charge: float
     round_trip_efficiency: float
@@ -43,34 +49,12 @@ class Storage(Equipment):
         return self.storage_capacity * (1 - self.state_of_charge)
 
     @abstractmethod
-    def update_state(self, energy):
+    def energy_request(self, energy) -> float:
         pass
 
-
-class Battery(Storage):
-    def update_state(self, energy: float):
-        if energy > 0:
-            # Apply efficiency on charge only
-            energy = self.round_trip_efficiency * energy
-        self.state_of_charge += energy / self.storage_capacity
-
-    def energy_request(self, energy) -> float:
-        # Negative energy indicates discharge
-        # Positive energy indicate charge
-        if energy < 0:
-            energy_exchange = - min(
-                abs(energy),
-                self.discharge_capacity,
-                self.available_energy
-            )
-        else:
-            energy_exchange = min(
-                energy,
-                self.available_storage,
-                self.charge_capacity
-            )
-        self.update_state(energy_exchange)
-        return energy_exchange
+    @abstractmethod
+    def update_state(self, energy):
+        pass
 
 
 @dataclass
@@ -91,3 +75,5 @@ class BasicDispatcher(Dispatcher):
         for plant in self.equipment:
             plant.dispatch()
             self.remaining_demand_arr -= plant.dispatch_arr
+
+
