@@ -4,9 +4,9 @@ from typing import Type, List, Union
 from numbers import Number
 import numpy as np
 import pandas as pd
-from ts_tariffs.sites import ElectricityMeterData
+from ts_tariffs.sites import ElectricityMeterData, MeterData
 
-from metering import ThermalLoadFlexMeter, DispatchFlexer
+from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
 from time_series_utils import Scheduler, Forecaster, PeakShaveTools
 from equipment import Equipment, Storage
@@ -30,7 +30,7 @@ class Controller(ABC):
     forecaster: Forecaster = None
     forecast_scheduler: Scheduler = None
     conditions: List[Conditions] = None
-    meter: DispatchFlexer = None
+    meter: MeterData = None
     peak_threshold: float = 0.0
 
     @abstractmethod

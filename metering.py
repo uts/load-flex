@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta, datetime
 from typing import Union, Dict
 from abc import abstractmethod, ABC
 
 import pandas as pd
 import numpy as np
-from ts_tariffs.sites import Validator, ElectricityMeterData, MeterData
+from ts_tariffs.sites import ElectricityMeterData, MeterData
+from ts_tariffs.sites import Validator as TSTariffValidator
+
+
+class Validator(TSTariffValidator):
+    @staticmethod
+    def type_check(name, obj,valid_types: tuple):
+        if not isinstance(obj, valid_types):
+            valid_types_str = ', '.join(valid_types)
+            raise TypeError(f'{name} must be type/s: {valid_types_str}')
 
 
 class Converter:
@@ -41,9 +50,15 @@ class Converter:
 
 
 @dataclass
-class DispatchFlexer(ABC):
-    dispatch_ts: pd.DataFrame = None
-    flexed_meter_ts: pd.DataFrame = None
+class DispatchFlexMeter(ABC):
+    name: str
+    meter: Union[MeterData, ElectricityMeterData]
+    dispatch_ts: pd.DataFrame = field(init=False)
+    flexed_meter_ts: pd.DataFrame = field(init=False)
+
+    def __post_init__(self):
+        self.dispatch_ts = pd.DataFrame(index=self.meter.meter_ts.index)
+        self.flexed_meter_ts = pd.DataFrame(index=self.meter.meter_ts.index)
 
     @abstractmethod
     def calculate_flexed_demand(
@@ -67,13 +82,14 @@ class DispatchFlexer(ABC):
 
 
 @dataclass
-class PowerFlexMeter(DispatchFlexer, ElectricityMeterData):
-    """
-    """
+class PowerFlexMeter(DispatchFlexMeter):
 
     def __post_init__(self):
-        self.dispatch_ts = pd.DataFrame(index=self.meter_ts.index)
-        self.flexed_meter_ts = pd.DataFrame(index=self.meter_ts.index)
+        Validator.type_check(
+            'meter attribute of PowerFlexMeter',
+        self.meter,
+        (ElectricityMeterData,)
+        )
 
     def calculate_flexed_demand(
             self,
@@ -82,11 +98,11 @@ class PowerFlexMeter(DispatchFlexer, ElectricityMeterData):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
         """
-        df = self.meter_ts.copy()
+        df = self.meter.meter_ts.copy()
         df['demand_energy'] += self.dispatch_ts[['charge', 'discharge']].sum(axis=1)
         df['demand_power'] = Converter.energy_to_power(
             df['demand_energy'],
-            self.sample_rate / timedelta(hours=1)
+            self.meter.sample_rate / timedelta(hours=1)
         )
         df['demand_apparent'] = Converter.power_to_apparent(
             df['demand_power'],
@@ -105,25 +121,22 @@ class ThermalLoadProperties:
 
 @dataclass
 class ThermalLoadFlexMeter(
-    DispatchFlexer,
-    ThermalLoadProperties,
-    MeterData
+    DispatchFlexMeter,
 ):
+    thermal_properties: ThermalLoadProperties
 
     def __post_init__(self):
-        self.dispatch_ts = pd.DataFrame(index=self.meter_ts.index)
-        self.flexed_meter_ts = pd.DataFrame(index=self.meter_ts.index)
-
         Validator.data_cols(
-            self.meter_ts,
+            self.meter.meter_ts,
             (
                 'equivalent_thermal_energy',
                 'electrical_energy',
                 'gross_electrical_energy'
             )
         )
-        self.meter_ts['other_electrical_energy'] = \
-            self.meter_ts['gross_electrical_energy'] - self.meter_ts['electrical_energy']
+        self.meter.meter_ts['other_electrical_energy'] = \
+            self.meter.meter_ts['gross_electrical_energy'] - \
+            self.meter.meter_ts['electrical_energy']
 
     def augment_load(
             self,
@@ -131,7 +144,7 @@ class ThermalLoadFlexMeter(
             augment_as: str,
             coeff_of_performance: Union[float, np.ndarray]
     ):
-        df = self.meter_ts.copy()
+        df = self.meter.meter_ts.copy()
         if augment_as == 'thermal':
             df['equivalent_thermal_energy'] += augmentation
             augmentation = Converter.thermal_to_electrical(
@@ -154,13 +167,13 @@ class ThermalLoadFlexMeter(
     ):
         self.augment_load(
             self.dispatch_ts['charge'],
-            self.charge_as,
-            self.flex_cop
+            self.thermal_properties.charge_as,
+            self.thermal_properties.flex_cop
         )
         self.augment_load(
             self.dispatch_ts['discharge'],
-            self.discharge_as,
-            self.load_cop
+            self.thermal_properties.discharge_as,
+            self.thermal_properties.load_cop
         )
 
     @classmethod
@@ -169,27 +182,23 @@ class ThermalLoadFlexMeter(
             name,
             electrical_meter: ElectricityMeterData,
             load_column: str,
-            charge_as: str,
-            discharge_as: str,
-            flex_cop: Union[float, np.ndarray, pd.Series],
-            load_cop: Union[float, np.ndarray, pd.Series],
+            thermal_properties: ThermalLoadProperties
 
     ):
-        if isinstance(load_cop, float):
-            meter_ts = pd.DataFrame(
-                electrical_meter.meter_ts[load_column],
-                columns=['electrical_energy']
-            )
-            meter_ts['equivalent_thermal_energy'] = \
-                meter_ts['electrical_energy'] * load_cop
-            meter_ts['gross_electrical_energy'] = electrical_meter.meter_ts['demand_energy']
-            return cls(
-                name,
-                meter_ts,
-                electrical_meter.sample_rate,
-                electrical_meter.units,
-                charge_as,
-                discharge_as,
-                flex_cop,
-                load_cop
-            )
+
+        meter_ts = pd.DataFrame(
+            electrical_meter.meter_ts[load_column],
+            columns=['electrical_energy']
+        )
+        meter_ts['equivalent_thermal_energy'] = Converter.electrical_to_thermal(
+            meter_ts['electrical_energy'],
+            thermal_properties.load_cop
+        )
+        meter_ts['gross_electrical_energy'] = electrical_meter.meter_ts['demand_energy']
+        return cls(
+            name,
+            electrical_meter,
+            thermal_properties
+        )
+
+
