@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from ts_tariffs.sites import ElectricityMeterData
 
-from metering import ThermalLoadFlexMeter, FlexMeter
+from metering import ThermalLoadFlexMeter, DispatchFlexer
 from storage import Battery, ThermalStorage
 from time_series_utils import Scheduler, Forecaster, PeakShaveTools
 from equipment import Equipment, Storage
@@ -30,7 +30,7 @@ class Controller(ABC):
     forecaster: Forecaster = None
     forecast_scheduler: Scheduler = None
     conditions: List[Conditions] = None
-    meter: FlexMeter = None
+    meter: DispatchFlexer = None
     peak_threshold: float = 0.0
 
     @abstractmethod
@@ -127,6 +127,8 @@ class ThermalStorageController(StorageController):
         ts.reset_index(inplace=True, drop=True)
 
         limiting_threshold_idx = ts['other_electrical_energy'].idxmax()
+        ts['gross_mixed_electrical_thermal'] = \
+            ts['other_electrical_energy'] + ts['equivalent_thermal_energy']
         proposed_limit = PeakShaveTools.sub_load_peak_shave_limit(
             ts,
             limiting_threshold_idx,
