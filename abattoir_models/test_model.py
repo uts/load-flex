@@ -75,7 +75,7 @@ meter = PowerFlexMeter(
         jbs_consump_df,
         timedelta(minutes=30),
         column_map
-    )
+    ),
 )
 
 jbs_tariff_regime = TariffRegime(jbs_tariff_regime_data)

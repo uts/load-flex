@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
 from typing import Type, List, Union, Tuple
 from numbers import Number
 import numpy as np
 import pandas as pd
 from ts_tariffs.sites import ElectricityMeterData, MeterData
+from ts_tariffs.tariffs import TOUCharge, DemandCharge
 
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
@@ -15,11 +17,18 @@ from equipment import Equipment, Storage
 
 
 @dataclass
+class DemandScenario:
+    demand: float
+    dt: datetime
+
+
+@dataclass
 class DispatchCondition(ABC):
     @abstractmethod
     def limit_dispatch(
             self,
             controller: Controller,
+            demand_scenario,
             proposal: float
     ) -> float:
         pass
@@ -32,13 +41,15 @@ class ChargeHoursCondition(DispatchCondition):
     def limit_dispatch(
             self,
             controller: Controller,
+            demand_scenario,
             proposal: float
     ) -> float:
         ''' Set charge to 0.0 if hour is in non-charge hours.
         (Negative dispatch proposal is discharge, positive is charge)
         '''
-        hour = controller.meter.meter_ts.index.hour
-        proposal = min(0.0, proposal) if hour in self.non_charge_hours else proposal
+        proposal = min(0.0, proposal) \
+            if demand_scenario.dt.hour in self.non_charge_hours \
+            else proposal
         return proposal
 
 
@@ -49,13 +60,54 @@ class DischargeHoursCondition(DispatchCondition):
     def limit_dispatch(
             self,
             controller: Controller,
+            demand_scenario,
             proposal: float
     ) -> float:
-        ''' Set charge to 0.0 if hour is in non-charge hours.
+        """ Set discharge to 0.0 if hour is in non-discharge hours.
         (Negative dispatch proposal is discharge, positive is charge)
-        '''
-        hour = controller.meter.meter_ts.index.hour
-        proposal = max(0.0, proposal) if hour in self.non_discharge_hours else proposal
+        """
+        proposal = max(0.0, proposal) \
+            if demand_scenario.dt.hour in self.non_discharge_hours \
+            else proposal
+        return proposal
+
+
+@dataclass
+class OffPeakIncreasedPeakCondition(DispatchCondition):
+    tou_tariff: TOUCharge
+    demand_tariff: DemandCharge
+    sample_rate: timedelta
+
+    @property
+    def demand_vs_tou_breakeven_point(self) -> float:
+        """ Breakeven point: The quantum of increased demand (as energy) in a
+        single timestep where the cost of the increase in the peak is equal to
+        the savings from TOU shifting (peak to offpeak) is equivalent
+
+        Answers the question: When is it cost effective to increase peak demand during
+        offpeak times for the sake of TOU load shifting?
+
+        * NOT A VERY SMART OPTIMISER:
+         - Assumes energy used to charge in offpeak is always discharged as peak tou
+         - assumes non-tou based demand charge
+        """
+        tou_shift_savings = \
+            max(self.tou_tariff.tou.bin_rates) - min(self.tou_tariff.tou.bin_rates)
+        sample_rate_hours = self.sample_rate / timedelta(hours=1)
+        return tou_shift_savings * sample_rate_hours / self.demand_tariff.rate
+
+    def limit_dispatch(
+            self,
+            controller: Controller,
+            demand_scenario,
+            proposal: float
+    ) -> float:
+        """ Check if charging will increase peak for demand charge period - if yes, check if
+        it is economical to do so by calculating balance of TOU and demand tariffs. If not
+        economical, throttle charge rate to the point where it is economical
+        """
+        breach = max(0.0, demand_scenario.demand + proposal - controller.dispatch_threshold)
+        proposal = min(self.demand_vs_tou_breakeven_point, breach)
         return proposal
 
 
@@ -99,10 +151,10 @@ class StorageController(Controller):
         """ """
         pass
 
-    def dispatch_proposal(self, demand: float) -> float:
-        proposal = self.dispatch_threshold - demand
+    def dispatch_proposal(self, demand_scenario: DemandScenario) -> float:
+        proposal = self.dispatch_threshold - DemandScenario.demand
         for condition in self.dispatch_conditions:
-            proposal = condition.limit_dispatch(self, proposal)
+            proposal = condition.limit_dispatch(self, demand_scenario, proposal)
         return proposal
 
     def dispatch(self):
@@ -116,7 +168,9 @@ class StorageController(Controller):
                     self.equipment.available_energy
                 )
             dispatch = self.equipment.energy_request(
-                self.dispatch_proposal(demand[self.dispatch_on])
+                self.dispatch_proposal(
+                    DemandScenario(demand[self.dispatch_on], dt)
+                )
             )
             reportables = {
                 'peak_threshold': self.dispatch_threshold,
