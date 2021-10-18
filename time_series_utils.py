@@ -32,7 +32,7 @@ class Forecaster(ABC):
     @abstractmethod
     def look_ahead(
         self,
-        arr: pd.Series,
+        time_series: pd.DataFrame,
         start_datetime: datetime,
     ) -> np.ndarray:
         pass

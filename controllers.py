@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import Type, List, Union
+from typing import Type, List, Union, Tuple
 from numbers import Number
 import numpy as np
 import pandas as pd
@@ -13,14 +15,48 @@ from equipment import Equipment, Storage
 
 
 @dataclass
-class Conditions(ABC):
+class DispatchCondition(ABC):
     @abstractmethod
-    def limit_dispatch(self) -> float:
+    def limit_dispatch(
+            self,
+            controller: Controller,
+            proposal: float
+    ) -> float:
         pass
 
-    @abstractmethod
-    def prevent_dispatch(self) -> bool:
-        pass
+
+@dataclass
+class ChargeHoursCondition(DispatchCondition):
+    non_charge_hours: Tuple[int]
+
+    def limit_dispatch(
+            self,
+            controller: Controller,
+            proposal: float
+    ) -> float:
+        ''' Set charge to 0.0 if hour is in non-charge hours.
+        (Negative dispatch proposal is discharge, positive is charge)
+        '''
+        hour = controller.meter.meter_ts.index.hour
+        proposal = min(0.0, proposal) if hour in self.non_charge_hours else proposal
+        return proposal
+
+
+@dataclass
+class DischargeHoursCondition(DispatchCondition):
+    non_discharge_hours: Tuple[int]
+
+    def limit_dispatch(
+            self,
+            controller: Controller,
+            proposal: float
+    ) -> float:
+        ''' Set charge to 0.0 if hour is in non-charge hours.
+        (Negative dispatch proposal is discharge, positive is charge)
+        '''
+        hour = controller.meter.meter_ts.index.hour
+        proposal = max(0.0, proposal) if hour in self.non_discharge_hours else proposal
+        return proposal
 
 
 @dataclass
@@ -29,9 +65,9 @@ class Controller(ABC):
     equipment: Equipment = None
     forecaster: Forecaster = None
     forecast_scheduler: Scheduler = None
-    conditions: List[Conditions] = None
-    meter: MeterData = None
-    peak_threshold: float = 0.0
+    dispatch_conditions: List[DispatchCondition] = None
+    meter: DispatchFlexMeter = None
+    dispatch_threshold: float = 0.0
 
     @abstractmethod
     def dispatch(self):
@@ -45,11 +81,11 @@ class StorageController(Controller):
 
     def __post_init__(self):
         # Initialise limits
-        if not self.peak_threshold:
+        if not self.dispatch_threshold:
             self.set_limit(
                 self.forecaster.look_ahead(
-                    self.meter.meter_ts,
-                    self.meter.meter_ts.first_valid_index()
+                    self.meter.meter.meter_ts,
+                    self.meter.meter.meter_ts.first_valid_index()
                 ),
                 self.equipment.available_energy
             )
@@ -64,11 +100,12 @@ class StorageController(Controller):
         pass
 
     def dispatch_proposal(self, demand: float) -> float:
-        proposal = self.peak_threshold - demand
+        proposal = self.dispatch_threshold - demand
+        for condition in self.dispatch_conditions:
+            proposal = condition.limit_dispatch(self, proposal)
         return proposal
 
     def dispatch(self):
-
         for dt, demand in self.meter.meter_ts.iteritems():
             if self.forecast_scheduler.event_due(dt):
                 self.set_limit(
@@ -82,7 +119,7 @@ class StorageController(Controller):
                 self.dispatch_proposal(demand[self.dispatch_on])
             )
             reportables = {
-                'peak_threshold': self.peak_threshold,
+                'peak_threshold': self.dispatch_threshold,
                 **self.equipment.status()
             }
             self.meter.update_dispatch(

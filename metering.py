@@ -183,7 +183,6 @@ class ThermalLoadFlexMeter(
             electrical_meter: ElectricityMeterData,
             load_column: str,
             thermal_properties: ThermalLoadProperties
-
     ):
 
         meter_ts = pd.DataFrame(

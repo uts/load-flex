@@ -3,7 +3,7 @@ from datetime import timedelta
 from portfolio.utils.data_utils import s3BucketManager, CacheManager
 import os
 
-from ts_tariffs.sites import Site
+from ts_tariffs.sites import Site, ElectricityMeterData
 from ts_tariffs.tariffs import TariffRegime
 
 from storage import Battery
@@ -67,11 +67,15 @@ column_map = {
 
 jbs_consump_df.set_index('datetime', inplace=True)
 jbs_consump_df = jbs_consump_df.loc['2021-07-01': '2021-07-31']
-meter = PowerFlexMeter.from_dataframe(
+print(jbs_consump_df)
+meter = PowerFlexMeter(
     'jbs',
-    jbs_consump_df,
-    timedelta(hours=0.5),
-    column_map,
+    ElectricityMeterData.from_dataframe(
+        'jbs',
+        jbs_consump_df,
+        timedelta(minutes=30),
+        column_map
+    )
 )
 
 jbs_tariff_regime = TariffRegime(jbs_tariff_regime_data)
@@ -88,8 +92,3 @@ print(jbs_consump_df['demand_energy'].sum())
 print(jbs_consump_df['demand_energy'].mean())
 print(jbs_consump_df['demand_apparent'].max())
 print(jbs_consump_df['demand_power'].max())
-#
-# battery = Battery(
-#
-# )
-
