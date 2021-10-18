@@ -18,6 +18,7 @@ class EquipmentMetadata:
 @dataclass
 class Equipment(ABC):
     name: str
+    report_on: List[str]
 
     def status(self) -> dict:
         return {x: getattr(self, x) for x in self.report_on}
