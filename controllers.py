@@ -34,7 +34,7 @@ class DispatchCondition(ABC):
 
 
 @dataclass
-class ChargeHoursCondition(DispatchCondition):
+class NonChargeHoursCondition(DispatchCondition):
     non_charge_hours: Tuple[int]
 
     def limit_dispatch(
@@ -53,7 +53,7 @@ class ChargeHoursCondition(DispatchCondition):
 
 
 @dataclass
-class DischargeHoursCondition(DispatchCondition):
+class NonDischargeHoursCondition(DispatchCondition):
     non_discharge_hours: Tuple[int]
 
     def limit_dispatch(
@@ -151,13 +151,13 @@ class StorageController(Controller):
         pass
 
     def dispatch_proposal(self, demand_scenario: DemandScenario) -> float:
-        proposal = self.dispatch_threshold - DemandScenario.demand
+        proposal = self.dispatch_threshold - demand_scenario.demand
         for condition in self.dispatch_conditions:
             proposal = condition.limit_dispatch(self, demand_scenario, proposal)
         return proposal
 
     def dispatch(self):
-        for dt, demand in self.meter.tseries.iteritems():
+        for dt, demand in self.meter.tseries.iterrows():
             if self.forecast_scheduler.event_due(dt):
                 self.set_limit(
                     self.forecaster.look_ahead(

@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Type, List, Union, Tuple
 from numbers import Number
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from time_series_utils import Forecaster
 
@@ -37,9 +37,8 @@ class Storage(Equipment):
     nominal_discharge_capacity: float
     nominal_charge_capacity: float
     storage_capacity: float
-    state_of_charge: float
     round_trip_efficiency: float
-    dispatch_report: pd.DataFrame
+    state_of_charge: float
 
     @property
     def available_energy(self):

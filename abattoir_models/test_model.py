@@ -1,15 +1,23 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from portfolio.utils.data_utils import s3BucketManager, CacheManager
 import os
 
-from ts_tariffs.sites import Site, ElectricityMeterData
+from ts_tariffs.sites import Site, Meters
 from ts_tariffs.tariffs import TariffRegime
 
-from storage import Battery
+from controllers import (
+    SimpleBatteryController,
+    NonChargeHoursCondition,
+    NonDischargeHoursCondition,
+)
 from local_data.local_data import aws_credentials, project_root
 from metering import PowerFlexMeter
 
+from storage import Battery
+from time_series_utils import PerfectForcaster, Scheduler
+
+from matplotlib import pyplot as plt
 
 bucket_str = 'race-abattoir-load-flex'
 cache_folder = os.path.join(project_root, '../local_data/s3_caching')
@@ -33,7 +41,7 @@ jbs_tariff_regime_data = bucket_manager.s3_json_to_dict(
     jbs_folder,
     'jbs_tariff_structure.json'
 )
-print(jbs_tariff_regime_data)
+
 jbs_consump_df = bucket_manager.s3_ftr_to_df(
     ['jbs_data'],
     'electricity_meter.ftr'
@@ -67,28 +75,61 @@ column_map = {
 
 jbs_consump_df.set_index('datetime', inplace=True)
 jbs_consump_df = jbs_consump_df.loc['2021-07-01': '2021-07-31']
-print(jbs_consump_df)
-meter = PowerFlexMeter(
-    'jbs',
-    ElectricityMeterData.from_dataframe(
-        'jbs',
-        jbs_consump_df,
-        timedelta(minutes=30),
-        column_map
-    ),
+meter = PowerFlexMeter.from_dataframe(
+    'JBS',
+    jbs_consump_df,
+    timedelta(minutes=30),
+    column_map
 )
-
+meters = Meters({meter.name: meter})
 jbs_tariff_regime = TariffRegime(jbs_tariff_regime_data)
 site = Site(
     'JBS',
     jbs_tariff_regime,
-    meter,
+    meters,
 )
-site.calculate_bill(detailed_bill=False)
-for charge, ammount in site.bill.items():
-    print(f'Charge: {charge}, Amount {round(ammount, 2):,}')
 
-print(jbs_consump_df['demand_energy'].sum())
-print(jbs_consump_df['demand_energy'].mean())
-print(jbs_consump_df['demand_apparent'].max())
-print(jbs_consump_df['demand_power'].max())
+forecaster = PerfectForcaster(timedelta(hours=24))
+scheduler = Scheduler(datetime(2021, 7, 1, 7), timedelta(24))
+
+battery = Battery(
+    'battery',
+    2000,
+    2000,
+    50_000,
+    1.0,
+    state_of_charge=1.0,
+)
+dispatch_conditions = [
+    NonChargeHoursCondition(tuple(range(7, 22))),
+    NonDischargeHoursCondition(tuple(range(22, 24))),
+    NonDischargeHoursCondition(tuple(range(0, 7)))
+]
+controller = SimpleBatteryController(
+    'battery controller',
+    battery,
+    forecaster,
+    scheduler,
+    dispatch_conditions,
+    meter,
+    dispatch_on='demand_energy'
+)
+
+controller.dispatch()
+site.add_meter(
+    meter.calculate_flexed_demand(
+        'JBS_flexed',
+        return_new_meter=True,
+    )
+)
+
+plt.plot(site.meters['JBS'].tseries['demand_energy'])
+plt.plot(site.meters['JBS_flexed'].tseries['demand_energy'])
+plt.show()
+
+site.calculate_bill()
+for bill_name, bill in site.bills.items():
+    for charge, amount in bill.itemised_totals.items():
+        print(f'Charge: {charge}, Amount {round(amount, 2):,}')
+
+

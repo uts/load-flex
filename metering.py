@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta, datetime
 from typing import Union, Dict
-from abc import abstractmethod, ABC
+from abc import abstractmethod
 
 import pandas as pd
 import numpy as np
@@ -75,14 +75,11 @@ class DispatchFlexMeter(MeterData):
     dispatch_ts: pd.DataFrame = field(init=False)
     flexed_meter_ts: pd.DataFrame = field(init=False)
 
-    def __post_init__(self):
-        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
-        self.flexed_meter_ts = pd.DataFrame(index=self.tseries.index)
-
     @abstractmethod
     def calculate_flexed_demand(
             self,
             name: str,
+            return_new_meter: bool = False,
     ):
         pass
 
@@ -93,21 +90,25 @@ class DispatchFlexMeter(MeterData):
             discharge: float,
             other: Dict[str, float] = None
     ):
-        self.dispatch_ts['charge'].loc[dt] = charge
-        self.dispatch_ts['discharge'].loc[dt] = discharge
+        self.dispatch_ts.loc[dt, 'charge'] = charge
+        self.dispatch_ts.loc[dt, 'discharge'] = discharge
         if other:
             for key, value in other.items():
-                self.dispatch_ts[key] = value
+                self.dispatch_ts.loc[dt, key] = value
 
 
 @dataclass
 class PowerFlexMeter(DispatchFlexMeter):
+
     def __post_init__(self):
         Validator.data_cols(self.tseries, ELECTRICITY_METER_COLS)
+        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
+        self.flexed_meter_ts = pd.DataFrame(index=self.tseries.index)
 
     def calculate_flexed_demand(
             self,
             name,
+            return_new_meter: bool = False,
     ):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
@@ -123,6 +124,20 @@ class PowerFlexMeter(DispatchFlexMeter):
             df['power_factor']
         )
         self.flexed_meter_ts = df
+        if return_new_meter:
+            column_map = {
+                column: {
+                    'ts': column,
+                    'units': self.units[column]
+                }
+                for column in ELECTRICITY_METER_COLS
+            }
+            return PowerFlexMeter.from_dataframe(
+                name,
+                self.flexed_meter_ts,
+                self.sample_rate,
+                column_map
+            )
 
 
 @dataclass
@@ -147,6 +162,8 @@ class ThermalLoadFlexMeter(
         self.tseries['other_electrical_energy'] = \
             self.tseries['gross_electrical_energy'] - \
             self.tseries['electrical_energy']
+        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
+        self.flexed_meter_ts = pd.DataFrame(index=self.tseries.index)
 
     def augment_load(
             self,
@@ -174,6 +191,7 @@ class ThermalLoadFlexMeter(
     def calculate_flexed_demand(
             self,
             name,
+            return_new_meter: bool = False,
     ):
         self.augment_load(
             self.dispatch_ts['charge'],
@@ -185,6 +203,20 @@ class ThermalLoadFlexMeter(
             self.thermal_properties.discharge_as,
             self.thermal_properties.load_cop
         )
+        if return_new_meter:
+            column_map = {
+                column: {
+                    'ts': column,
+                    'units': self.units[column]
+                }
+                for column in THERMAL_METER_COLS
+            }
+            return ThermalLoadFlexMeter.from_dataframe(
+                name,
+                self.flexed_meter_ts,
+                self.sample_rate,
+                column_map
+            )
 
     @classmethod
     def from_powerflex_meter(
@@ -194,7 +226,6 @@ class ThermalLoadFlexMeter(
             load_column: str,
             thermal_properties: ThermalLoadProperties
     ):
-
         tseries = pd.DataFrame(
             electrical_meter.tseries[load_column],
             columns=['electrical_energy']

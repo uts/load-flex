@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 from equipment import Storage
@@ -19,7 +19,7 @@ THERMAL_REPORT_ON = (
 
 @dataclass
 class Battery(Storage):
-    report_on: Tuple[str] = REPORT_ON
+    report_on: Tuple[str] = field(default=REPORT_ON, init=False)
 
     def update_state(self, energy: float):
         if energy > 0:
@@ -52,7 +52,7 @@ class ThermalStorage(Storage):
     charge_rate_model: StateBasedProperty
     charging_cop_model: StateBasedProperty
     hot_reservoir_temperature: float
-    report_on: Tuple[str] = THERMAL_REPORT_ON
+    report_on: Tuple[str] = field(default=THERMAL_REPORT_ON, init=False)
 
     @property
     def discharge_capacity(self):
