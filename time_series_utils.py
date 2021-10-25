@@ -19,7 +19,7 @@ class Scheduler:
 
     def event_due(self, dt: datetime) -> bool:
         due = False
-        if dt > self.next_event_due:
+        if dt >= self.next_event_due:
             due = True
             self.next_event_due = dt + self.interval
         return due
@@ -34,7 +34,7 @@ class Forecaster(ABC):
         self,
         time_series: pd.DataFrame,
         start_datetime: datetime,
-    ) -> np.ndarray:
+    ) -> pd.DataFrame:
         pass
 
 
@@ -61,7 +61,7 @@ class PeakShaveTools:
 
     @staticmethod
     def peak_area_idx(peak_areas, area, max_idx=None):
-        idx = np.searchsorted(peak_areas, area)
+        idx = np.searchsorted(peak_areas, area) - 1
         if max_idx:
             return min(idx, max_idx)
         else:

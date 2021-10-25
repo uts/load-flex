@@ -134,18 +134,13 @@ class StorageController(Controller):
         # Initialise limits
         if not self.dispatch_threshold:
             self.set_limit(
-                self.forecaster.look_ahead(
-                    self.meter.tseries,
-                    self.meter.tseries.first_valid_index()
-                ),
-                self.equipment.available_energy
+                self.meter.tseries.first_valid_index(),
             )
 
     @abstractmethod
     def set_limit(
             self,
-            demand_forecast: Union[List[Number], np.ndarray, pd.Series],
-            area: float
+            dt: datetime,
     ):
         """ """
         pass
@@ -159,20 +154,14 @@ class StorageController(Controller):
     def dispatch(self):
         for dt, demand in self.meter.tseries.iterrows():
             if self.forecast_scheduler.event_due(dt):
-                self.set_limit(
-                    self.forecaster.look_ahead(
-                        self.meter.tseries[self.dispatch_on],
-                        dt
-                    ),
-                    self.equipment.available_energy
-                )
+                self.set_limit(dt)
             dispatch = self.equipment.energy_request(
                 self.dispatch_proposal(
                     DemandScenario(demand[self.dispatch_on], dt)
                 )
             )
             reportables = {
-                'peak_threshold': self.dispatch_threshold,
+                'dispatch_threshold': self.dispatch_threshold,
                 **self.equipment.status()
             }
             self.meter.update_dispatch(
@@ -184,21 +173,47 @@ class StorageController(Controller):
 
 
 @dataclass
-class SimpleBatteryController(StorageController):
+class SimpleBatteryPeakShaveController(StorageController):
     equipment: Battery = None
 
     def set_limit(
             self,
-            demand_forecast: Union[List[Number], np.ndarray, pd.Series],
-            area: float
+            dt: datetime
     ):
-        sorted_arr = np.sort(
-            self.meter.tseries[self.dispatch_on].values
+        forecast = self.forecaster.look_ahead(
+            self.meter.tseries,
+            dt
         )
+        sorted_arr = np.sort(forecast[self.dispatch_on].values)
         peak_areas = PeakShaveTools.cumulative_peak_areas(sorted_arr)
-        index = PeakShaveTools.peak_area_idx(peak_areas, area)
+        index = PeakShaveTools.peak_area_idx(
+            peak_areas,
+            self.equipment.available_energy
+        )
         proposed_limit = np.flip(sorted_arr)[index]
         self.dispatch_threshold = max(self.dispatch_threshold, proposed_limit)
+
+
+@dataclass
+class SimpleBatteryTOUShiftController(StorageController):
+    equipment: Battery = None
+
+    def set_limit(
+            self,
+            dt: datetime
+    ):
+        forecast = self.forecaster.look_ahead(
+            self.meter.tseries,
+            dt
+        )
+        sorted_arr = np.sort(forecast[self.dispatch_on].values)
+        peak_areas = PeakShaveTools.cumulative_peak_areas(sorted_arr)
+        index = PeakShaveTools.peak_area_idx(
+            peak_areas,
+            self.equipment.available_energy
+        )
+        proposed_limit = np.flip(sorted_arr)[index]
+        self.dispatch_threshold = proposed_limit
 
 
 @dataclass
@@ -209,20 +224,22 @@ class ThermalStorageController(StorageController):
 
     def set_limit(
             self,
-            demand_arr: Union[List[Number], np.ndarray, pd.Series],
-            area: float
+            dt: datetime
     ):
-        ts = self.meter.tseries.copy()
-        ts.sort_values('gross_electrical_energy', inplace=True)
-        ts.reset_index(inplace=True, drop=True)
+        forecast = self.forecaster.look_ahead(
+            self.meter.tseries,
+            dt
+        )
+        forecast.sort_values('gross_electrical_energy', inplace=True)
+        forecast.reset_index(inplace=True, drop=True)
 
-        limiting_threshold_idx = ts['other_electrical_energy'].idxmax()
-        ts['gross_mixed_electrical_thermal'] = \
-            ts['other_electrical_energy'] + ts['equivalent_thermal_energy']
+        limiting_threshold_idx = forecast['other_electrical_energy'].idxmax()
+        forecast['gross_mixed_electrical_thermal'] = \
+            forecast['other_electrical_energy'] + forecast['equivalent_thermal_energy']
         proposed_limit = PeakShaveTools.sub_load_peak_shave_limit(
-            ts,
+            forecast,
             limiting_threshold_idx,
-            area,
+            self.equipment.available_energy,
             'gross_mixed_electrical_thermal',
             'equivalent_thermal_energy'
         )

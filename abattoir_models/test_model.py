@@ -7,7 +7,8 @@ from ts_tariffs.sites import Site, Meters
 from ts_tariffs.tariffs import TariffRegime
 
 from controllers import (
-    SimpleBatteryController,
+    SimpleBatteryTOUShiftController,
+    SimpleBatteryPeakShaveController,
     NonChargeHoursCondition,
     NonDischargeHoursCondition,
 )
@@ -90,7 +91,7 @@ site = Site(
 )
 
 forecaster = PerfectForcaster(timedelta(hours=24))
-scheduler = Scheduler(datetime(2021, 7, 1, 7), timedelta(24))
+scheduler = Scheduler(datetime(2021, 7, 1, 7), timedelta(hours=24))
 
 battery = Battery(
     'battery',
@@ -105,7 +106,7 @@ dispatch_conditions = [
     NonDischargeHoursCondition(tuple(range(22, 24))),
     NonDischargeHoursCondition(tuple(range(0, 7)))
 ]
-controller = SimpleBatteryController(
+controller = SimpleBatteryTOUShiftController(
     'battery controller',
     battery,
     forecaster,
@@ -125,7 +126,9 @@ site.add_meter(
 
 plt.plot(site.meters['JBS'].tseries['demand_energy'])
 plt.plot(site.meters['JBS_flexed'].tseries['demand_energy'])
+plt.plot(site.meters['JBS'].dispatch_ts['dispatch_threshold'])
 plt.show()
+
 
 site.calculate_bill()
 for bill_name, bill in site.bills.items():
