@@ -9,8 +9,20 @@ from ts_tariffs.tariffs import TOUCharge, DemandCharge
 
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
-from time_series_utils import Scheduler, Forecaster, PeakShaveTools
+from time_series_utils import Schedule, Forecaster, PeakShaveTools, TOUShiftingCalculator
 from equipment import Equipment, Storage, Dispatch
+
+
+@dataclass
+class TwinScheduler:
+    charge_threshold: Schedule
+    discharge_threshold: Schedule
+
+    def charge_threshold_due(self, dt):
+        return self.charge_threshold.event_due(dt)
+
+    def discharge_threshold_due(self, dt):
+        return self.discharge_threshold.event_due(dt)
 
 
 @dataclass
@@ -154,6 +166,7 @@ class PeakShaveTOUDispatchThreshold(DispatchThreshold):
 class ThresholdConditions:
     hours: Tuple[int]
     cap: float
+    forecast_window: timedelta
 
 
 @dataclass
@@ -180,7 +193,7 @@ class Controller(ABC):
     name: str
     equipment: Equipment = None
     forecaster: Forecaster = None
-    forecast_scheduler: Scheduler = None
+    threshold_schedule: Schedule = None
     dispatch_conditions: List[DispatchConstraint] = None
     meter: DispatchFlexMeter = None
     dispatch_threshold: DispatchThreshold = None
@@ -267,19 +280,6 @@ class SimpleBatteryPeakShaveController(StorageController):
         )
         return np.flip(sorted_arr)[index]
 
-    def set_threshold(self, dt: datetime):
-        if self.forecast_scheduler.event_due(dt):
-            proposal = self.propose_threshold(dt)
-        else:
-            proposal = self.dispatch_threshold.value
-        self.dispatch_threshold.set_threshold(proposal, dt)
-
-
-@dataclass
-class TouWithPeakShaveController(SimpleBatteryPeakShaveController):
-    charge_conditions: ThresholdConditions = None
-    discharge_conditions: ThresholdConditions = None
-
     def propose_charge_threshold(self, dt: datetime):
         """ Sets a charge limit in order to completely charge battery
         but to also spread the charging across the charge hours, rather
@@ -298,7 +298,7 @@ class TouWithPeakShaveController(SimpleBatteryPeakShaveController):
             peak_areas,
             self.equipment.available_storage
         )
-        proposal = np.flip(sorted_arr)[index]
+        proposal = forecast[self.dispatch_on].values.max() - np.flip(sorted_arr)[index]
         # if proposed threshold is too much for charge capacity to deliver,
         # just base on charge capacity
         if sorted_arr.max() - proposal > self.equipment.nominal_charge_capacity:
@@ -306,16 +306,65 @@ class TouWithPeakShaveController(SimpleBatteryPeakShaveController):
         return proposal
 
     def set_threshold(self, dt: datetime):
-        if self.forecast_scheduler.event_due(dt):
+        if self.threshold_schedule.event_due(dt):
+            proposal = self.propose_threshold(dt)
+        else:
             proposal = self.dispatch_threshold.value
-            if self.charge_conditions:
-                if dt.hour in self.charge_conditions.hours:
-                    proposal = self.propose_charge_threshold(dt)
-            if self.discharge_conditions:
-                if dt.hour in self.discharge_conditions.hours:
-                    proposal = self.propose_threshold(dt)
+        self.dispatch_threshold.set_threshold(proposal, dt)
 
-            self.dispatch_threshold.set_threshold(proposal, dt)
+
+@dataclass
+class TouController(StorageController):
+    charge_conditions: ThresholdConditions = None
+    discharge_conditions: ThresholdConditions = None
+    threshold_schedule: TwinScheduler = None
+
+    def propose_threshold(self, arr: np.ndarray):
+        sorted_arr = np.sort(arr)
+        peak_areas = PeakShaveTools.cumulative_peak_areas(sorted_arr)
+        index = PeakShaveTools.peak_area_idx(
+            peak_areas,
+            self.equipment.available_energy
+        )
+        return np.flip(sorted_arr)[index]
+
+    def charge_threshold_proposal(self, dt: datetime):
+        self.forecaster.window = self.charge_conditions.forecast_window
+        forecast = self.forecaster.look_ahead(
+            self.meter.tseries,
+            dt
+        )
+        inverted_arr =\
+            forecast[self.dispatch_on].values.max() \
+            - forecast[self.dispatch_on].values
+        return forecast[self.dispatch_on].values.max() \
+            - TOUShiftingCalculator.calculate_proposal(
+            inverted_arr,
+            self.equipment.available_storage
+        )
+
+    def discharge_threshold_proposal(self, dt: datetime):
+        self.forecaster.window = self.discharge_conditions.forecast_window
+        forecast = self.forecaster.look_ahead(
+            self.meter.tseries,
+            dt
+        )
+        demand_arr = forecast[self.dispatch_on].values
+        return TOUShiftingCalculator.calculate_proposal(
+            demand_arr,
+            self.equipment.available_energy
+        )
+
+    def set_threshold(
+            self,
+            dt: datetime,
+    ):
+        proposal = self.dispatch_threshold.value
+        if self.threshold_schedule.charge_threshold.event_due(dt):
+            proposal = self.charge_threshold_proposal(dt)
+        if self.threshold_schedule.discharge_threshold.event_due(dt):
+            proposal = self.discharge_threshold_proposal(dt)
+        self.dispatch_threshold.set_threshold(proposal, dt)
 
 
 @dataclass

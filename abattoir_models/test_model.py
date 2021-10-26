@@ -12,13 +12,13 @@ from controllers import (
     HoursConstraint,
     PeakShaveDispatchThreshold,
     PeakShaveTOUDispatchThreshold,
-    ExplicitCapsThreshold, ThresholdConditions, TouWithPeakShaveController
+    ExplicitCapsThreshold, ThresholdConditions, TouController, TwinScheduler
 )
 from local_data.local_data import aws_credentials, project_root
 from metering import PowerFlexMeter
 
 from storage import Battery
-from time_series_utils import PerfectForcaster, Scheduler, SpecificEvents, PeriodicEvents, SpecificHourEvents
+from time_series_utils import PerfectForcaster, Schedule, SpecificEvents, PeriodicEvents, SpecificHourEvents
 
 from matplotlib import pyplot as plt
 
@@ -98,20 +98,27 @@ site = Site(
 
 forecaster = PerfectForcaster(timedelta(hours=24))
 first_threshold_set_times = SpecificEvents(tuple([meter.first_datetime()]))
-daily_threshold_set_times = SpecificHourEvents(
-    hours=tuple([7, 9]),
+daily_charge_threshold_set_times = SpecificHourEvents(
+    hours=tuple([22]),
+    all_days=True
+)
+daily_discharge_threshold_set_times = SpecificHourEvents(
+    hours=tuple([7]),
     all_days=True
 )
 
-scheduler = Scheduler(
-    [first_threshold_set_times, daily_threshold_set_times]
+charge_schedule = Schedule([first_threshold_set_times, daily_charge_threshold_set_times])
+discharge_schedule = Schedule([daily_discharge_threshold_set_times])
+scheduler = TwinScheduler(
+    charge_schedule,
+    discharge_schedule
 )
 
 battery = Battery(
     'battery',
     2000,
     2000,
-    50_000,
+    40_000,
     1.0,
     state_of_charge=1.0,
 )
@@ -119,20 +126,15 @@ battery = Battery(
 charge_hours = tuple((*range(0, 7), *range(22, 24)))
 discharge_hours = tuple(range(7, 22))
 
-dispatch_conditions = [
-    HoursConstraint(
-        charge_hours,
-        discharge_hours,
-    )
-]
-
 charge_conds = ThresholdConditions(
     charge_hours,
-    meter.max('demand_energy')
+    meter.max('demand_energy'),
+    forecast_window=timedelta(hours=len(charge_hours))
 )
 discharge_conds = ThresholdConditions(
     discharge_hours,
-    cap=None
+    cap=None,
+    forecast_window=timedelta(hours=len(discharge_hours))
 )
 
 threshold = PeakShaveTOUDispatchThreshold(
@@ -140,12 +142,12 @@ threshold = PeakShaveTOUDispatchThreshold(
     0.0,
 )
 
-controller = TouWithPeakShaveController(
+controller = TouController(
     'battery controller',
     battery,
     forecaster,
     scheduler,
-    dispatch_conditions,
+    [],
     meter,
     dispatch_on='demand_energy',
     dispatch_threshold=threshold,
@@ -161,10 +163,20 @@ site.add_meter(
     )
 )
 
-plt.plot(site.meters['JBS'].tseries['demand_energy'], color='blue', label='base')
-plt.plot(site.meters['JBS_flexed'].tseries['demand_energy'], color='green', label='flexed')
-plt.plot(site.meters['JBS'].dispatch_ts['dispatch_threshold'], color='gray', label='threshold')
-plt.legend()
+fig, axs = plt.subplots(4, sharex=True)
+axs[0].plot(site.meters['JBS'].dispatch_ts['dispatch_threshold'], color='gray', label='threshold')
+axs[0].plot(site.meters['JBS'].tseries['demand_energy'], color='blue', label='base')
+axs[0].plot(site.meters['JBS_flexed'].tseries['demand_energy'], color='green', label='flexed')
+axs[1].plot(site.meters['JBS'].dispatch_ts['charge'], color='blue', label='charge')
+axs[1].plot(site.meters['JBS'].dispatch_ts['discharge'], color='green', label='discharge')
+axs[2].plot(site.meters['JBS'].dispatch_ts['cycle_count'], color='pink', label='cycle_count')
+axs[3].plot(site.meters['JBS'].dispatch_ts['state_of_charge'], color='gray', label='state_of_charge')
+axs[0].legend()
+axs[1].legend()
+axs[2].legend()
+axs[3].legend()
+
+
 plt.show()
 
 print(site.meters['JBS_flexed'].tseries['demand_energy'].max())

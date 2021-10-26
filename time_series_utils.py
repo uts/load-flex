@@ -13,6 +13,7 @@ WEEKEND_DAYS = ['saturday', 'sunday']
 ALL_DAYS = tuple([x.lower() for x in list(calendar.day_name)])
 WEEKDAYS = tuple([x for x in ALL_DAYS if x not in WEEKEND_DAYS])
 
+
 @dataclass
 class EventOccurrence(ABC):
     @abstractmethod
@@ -71,18 +72,18 @@ class SpecificHourEvents(EventOccurrence):
             for day in WEEKDAYS:
                 setattr(self, day, True)
 
-
     def is_due(self, dt: datetime):
         due = False
         weekday = dt.strftime('%A').lower()
         if getattr(self, weekday):
             if dt.hour in self.hours:
-                due = True
+                if dt.minute == 0:
+                    due = True
         return due
 
 
 @dataclass
-class Scheduler:
+class Schedule:
     event_occurrences: List[EventOccurrence]
 
     def event_due(self, dt: datetime) -> bool:
@@ -150,3 +151,37 @@ class PeakShaveTools:
             if exposed_sub_area >= area:
                 return sorted_df[gross_col].iloc[i + 1]
         return 0.0
+
+
+@dataclass
+class TOUShiftingCalculator:
+    @staticmethod
+    def cap_area(arr: np.ndarray):
+        cap_arr = arr - arr.min()
+        return cap_arr.sum()
+
+    @staticmethod
+    def cap_height(arr: np.ndarray):
+        cap_arr = arr - arr.min()
+        return cap_arr.max()
+
+    @staticmethod
+    def additional_depth(arr: np.ndarray, area_required: float):
+        width = len(arr)
+        return area_required / width
+
+    @staticmethod
+    def calculate_proposal(demand_arr: np.ndarray, area: float):
+        cap_area = TOUShiftingCalculator.cap_area(demand_arr)
+        additional_area_required = area - cap_area
+        if additional_area_required > 0.0:
+            additional_depth_required = TOUShiftingCalculator.additional_depth(
+                demand_arr,
+                additional_area_required
+            )
+            total_depth = \
+                additional_depth_required + TOUShiftingCalculator.cap_height(demand_arr)
+            proposal = demand_arr.max() - total_depth
+        else:
+            proposal = demand_arr.max() - TOUShiftingCalculator.cap_height(demand_arr)
+        return proposal

@@ -7,7 +7,8 @@ from state_models import StateBasedProperty
 REPORT_ON = (
         'state_of_charge',
         'available_energy',
-        'available_storage'
+        'available_storage',
+        'cycle_count'
     )
 THERMAL_REPORT_ON = (
         'discharge_capacity',
@@ -20,13 +21,17 @@ THERMAL_REPORT_ON = (
 @dataclass
 class Battery(Storage):
     report_on: Tuple[str] = field(default=REPORT_ON, init=False)
+    cycle_count: float = 0.0
 
     def update_state(self, dispatch: Dispatch):
         # Apply efficiency on charge only
         delta_energy = \
             self.round_trip_efficiency * dispatch.charge \
             - dispatch.discharge
-        self.state_of_charge += delta_energy / self.storage_capacity
+        delta_state_of_charge = delta_energy / self.storage_capacity
+        if delta_state_of_charge > 0.0:
+            self.cycle_count += delta_state_of_charge
+        self.state_of_charge += delta_state_of_charge
 
     def dispatch_request(self, proposal: Dispatch) -> Dispatch:
         dispatch = Dispatch(
