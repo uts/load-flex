@@ -3,16 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import Type, List, Union, Tuple
-from numbers import Number
+from typing import List, Tuple
 import numpy as np
-import pandas as pd
 from ts_tariffs.tariffs import TOUCharge, DemandCharge
 
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
 from time_series_utils import Scheduler, Forecaster, PeakShaveTools
-from equipment import Equipment, Storage
+from equipment import Equipment, Storage, Dispatch
 
 
 @dataclass
@@ -22,57 +20,44 @@ class DemandScenario:
 
 
 @dataclass
-class DispatchCondition(ABC):
+class DispatchConstraint(ABC):
     @abstractmethod
     def limit_dispatch(
             self,
             controller: Controller,
-            demand_scenario,
-            proposal: float
-    ) -> float:
+            demand_scenario: DemandScenario,
+            proposal: Dispatch
+    ) -> Dispatch:
         pass
 
 
 @dataclass
-class NonChargeHoursCondition(DispatchCondition):
-    non_charge_hours: Tuple[int]
+class HoursConstraint(DispatchConstraint):
+    """ Defines hours when charging/discharging are permitted
+    """
+    charge_hours: Tuple[int] = None
+    discharge_hours: Tuple[int] = None
 
     def limit_dispatch(
             self,
             controller: Controller,
-            demand_scenario,
-            proposal: float
-    ) -> float:
-        ''' Set charge to 0.0 if hour is in non-charge hours.
-        (Negative dispatch proposal is discharge, positive is charge)
-        '''
-        proposal = min(0.0, proposal) \
-            if demand_scenario.dt.hour in self.non_charge_hours \
-            else proposal
-        return proposal
-
-
-@dataclass
-class NonDischargeHoursCondition(DispatchCondition):
-    non_discharge_hours: Tuple[int]
-
-    def limit_dispatch(
-            self,
-            controller: Controller,
-            demand_scenario,
-            proposal: float
-    ) -> float:
-        """ Set discharge to 0.0 if hour is in non-discharge hours.
-        (Negative dispatch proposal is discharge, positive is charge)
+            demand_scenario: DemandScenario,
+            proposal: Dispatch
+    ) -> Dispatch:
         """
-        proposal = max(0.0, proposal) \
-            if demand_scenario.dt.hour in self.non_discharge_hours \
-            else proposal
+        """
+        hour = demand_scenario.dt.hour
+        if self.charge_hours:
+            if hour not in self.charge_hours:
+                proposal.charge = 0.0
+        if self.discharge_hours:
+            if hour not in self.discharge_hours:
+                proposal.discharge = 0.0
         return proposal
 
 
 @dataclass
-class OffPeakIncreasedPeakCondition(DispatchCondition):
+class DemandChargeVsTouPeakConstraint(DispatchConstraint):
     tou_tariff: TOUCharge
     demand_tariff: DemandCharge
     sample_rate: timedelta
@@ -98,16 +83,96 @@ class OffPeakIncreasedPeakCondition(DispatchCondition):
     def limit_dispatch(
             self,
             controller: Controller,
-            demand_scenario,
-            proposal: float
-    ) -> float:
+            demand_scenario: DemandScenario,
+            proposal: Dispatch
+    ) -> Dispatch:
         """ Check if charging will increase peak for demand charge period - if yes, check if
         it is economical to do so by calculating balance of TOU and demand tariffs. If not
         economical, throttle charge rate to the point where it is economical
         """
-        breach = max(0.0, demand_scenario.demand + proposal - controller.dispatch_threshold)
-        proposal = min(self.demand_vs_tou_breakeven_point, breach)
+        breach = max(
+            0.0,
+            demand_scenario.demand + proposal.charge - controller.dispatch_threshold.value
+        )
+        proposal.charge = min(self.demand_vs_tou_breakeven_point, breach)
         return proposal
+
+
+@dataclass
+class DispatchThreshold(ABC):
+    historical_peak_demand: float
+    historical_min_demand: float
+    value: float = None
+
+    def update_historical_net_demand(self, net_demand: float):
+        self.historical_peak_demand = max(net_demand, self.historical_peak_demand)
+        self.historical_min_demand = min(net_demand, self.historical_peak_demand)
+
+    @abstractmethod
+    def set_threshold(
+            self,
+            proposal: float,
+            dt,
+    ):
+        pass
+
+
+@dataclass
+class PeakShaveDispatchThreshold(DispatchThreshold):
+    """ Sets charge and discharge thresholds equally according to
+        historical maximum.
+
+    This strategy reduces the depth of peak shaving attempted by limiting it
+    to be only as good as historical achievement. This is specifically advantageous
+    where demand tariffs are the primary concern and there is no advantage in peak shaving
+    below the period's peak demand. The advantage is gained by reducing the available
+    energy required to achieve the target peak - i.e. there is more likelihood of energy
+    being available
+    """
+    def set_threshold(
+            self,
+            proposal: float,
+            dt,
+    ):
+        self.value = max(
+            proposal,
+            self.historical_peak_demand
+        )
+
+
+@dataclass
+class PeakShaveTOUDispatchThreshold(DispatchThreshold):
+    def set_threshold(
+            self,
+            proposal: float,
+            dt,
+    ):
+        self.value = proposal
+
+
+@dataclass
+class ThresholdConditions:
+    hours: Tuple[int]
+    cap: float
+
+
+@dataclass
+class ExplicitCapsThreshold(DispatchThreshold):
+    charge_conditions: ThresholdConditions = None
+    discharge_conditions: ThresholdConditions = None
+
+    def set_threshold(
+            self,
+            proposal: float,
+            dt,
+    ):
+        self.value = proposal
+        if self.charge_conditions:
+            if dt.hour in self.charge_conditions.hours:
+                self.value = self.charge_conditions.cap
+        if self.discharge_conditions:
+            if dt.hour in self.discharge_conditions.hours:
+                self.value = self.discharge_conditions.cap
 
 
 @dataclass
@@ -116,9 +181,9 @@ class Controller(ABC):
     equipment: Equipment = None
     forecaster: Forecaster = None
     forecast_scheduler: Scheduler = None
-    dispatch_conditions: List[DispatchCondition] = None
+    dispatch_conditions: List[DispatchConstraint] = None
     meter: DispatchFlexMeter = None
-    dispatch_threshold: float = 0.0
+    dispatch_threshold: DispatchThreshold = None
 
     @abstractmethod
     def dispatch(self):
@@ -132,43 +197,56 @@ class StorageController(Controller):
 
     def __post_init__(self):
         # Initialise limits
-        if not self.dispatch_threshold:
-            self.set_limit(
-                self.meter.tseries.first_valid_index(),
-            )
+        if not self.dispatch_threshold.value:
+            if self.equipment.state_of_charge:
+                self.set_threshold(
+                    self.meter.first_datetime(),
+                )
+            else:
+                forecast = self.forecaster.look_ahead(
+                    self.meter.tseries,
+                    self.meter.first_datetime()
+                )
+                self.dispatch_threshold.set_threshold(forecast[self.dispatch_on].mean())
+
 
     @abstractmethod
-    def set_limit(
+    def set_threshold(
             self,
             dt: datetime,
     ):
-        """ """
+        """
+        """
         pass
 
     def dispatch_proposal(self, demand_scenario: DemandScenario) -> float:
-        proposal = self.dispatch_threshold - demand_scenario.demand
+        proposal = Dispatch.from_raw_float(
+            demand_scenario.demand - self.dispatch_threshold.value
+        )
         for condition in self.dispatch_conditions:
             proposal = condition.limit_dispatch(self, demand_scenario, proposal)
         return proposal
 
     def dispatch(self):
         for dt, demand in self.meter.tseries.iterrows():
-            if self.forecast_scheduler.event_due(dt):
-                self.set_limit(dt)
-            dispatch = self.equipment.energy_request(
-                self.dispatch_proposal(
+            self.set_threshold(dt)
+            proposal = self.dispatch_proposal(
                     DemandScenario(demand[self.dispatch_on], dt)
                 )
-            )
+            dispatch = self.equipment.dispatch_request(proposal)
             reportables = {
-                'dispatch_threshold': self.dispatch_threshold,
+                'dispatch_threshold': self.dispatch_threshold.value,
                 **self.equipment.status()
             }
-            self.meter.update_dispatch(
+            flexed_net = self.meter.update_dispatch(
                 dt,
-                max(dispatch, 0.0),
-                min(dispatch, 0),
-                reportables
+                dispatch,
+                self.dispatch_on,
+                reportables,
+                return_net=True
+            )
+            self.dispatch_threshold.update_historical_net_demand(
+                flexed_net
             )
 
 
@@ -176,10 +254,7 @@ class StorageController(Controller):
 class SimpleBatteryPeakShaveController(StorageController):
     equipment: Battery = None
 
-    def set_limit(
-            self,
-            dt: datetime
-    ):
+    def propose_threshold(self, dt: datetime):
         forecast = self.forecaster.look_ahead(
             self.meter.tseries,
             dt
@@ -190,30 +265,57 @@ class SimpleBatteryPeakShaveController(StorageController):
             peak_areas,
             self.equipment.available_energy
         )
-        proposed_limit = np.flip(sorted_arr)[index]
-        self.dispatch_threshold = max(self.dispatch_threshold, proposed_limit)
+        return np.flip(sorted_arr)[index]
+
+    def set_threshold(self, dt: datetime):
+        if self.forecast_scheduler.event_due(dt):
+            proposal = self.propose_threshold(dt)
+        else:
+            proposal = self.dispatch_threshold.value
+        self.dispatch_threshold.set_threshold(proposal, dt)
 
 
 @dataclass
-class SimpleBatteryTOUShiftController(StorageController):
-    equipment: Battery = None
+class TouWithPeakShaveController(SimpleBatteryPeakShaveController):
+    charge_conditions: ThresholdConditions = None
+    discharge_conditions: ThresholdConditions = None
 
-    def set_limit(
-            self,
-            dt: datetime
-    ):
+    def propose_charge_threshold(self, dt: datetime):
+        """ Sets a charge limit in order to completely charge battery
+        but to also spread the charging across the charge hours, rather
+        than in one hit
+        """
         forecast = self.forecaster.look_ahead(
             self.meter.tseries,
             dt
         )
-        sorted_arr = np.sort(forecast[self.dispatch_on].values)
+        inverted_arr =\
+            forecast[self.dispatch_on].values.max() \
+            - forecast[self.dispatch_on].values
+        sorted_arr = np.sort(inverted_arr)
         peak_areas = PeakShaveTools.cumulative_peak_areas(sorted_arr)
         index = PeakShaveTools.peak_area_idx(
             peak_areas,
-            self.equipment.available_energy
+            self.equipment.available_storage
         )
-        proposed_limit = np.flip(sorted_arr)[index]
-        self.dispatch_threshold = proposed_limit
+        proposal = np.flip(sorted_arr)[index]
+        # if proposed threshold is too much for charge capacity to deliver,
+        # just base on charge capacity
+        if sorted_arr.max() - proposal > self.equipment.nominal_charge_capacity:
+            proposal = max(0.0, sorted_arr.max() - self.equipment.nominal_charge_capacity)
+        return proposal
+
+    def set_threshold(self, dt: datetime):
+        if self.forecast_scheduler.event_due(dt):
+            proposal = self.dispatch_threshold.value
+            if self.charge_conditions:
+                if dt.hour in self.charge_conditions.hours:
+                    proposal = self.propose_charge_threshold(dt)
+            if self.discharge_conditions:
+                if dt.hour in self.discharge_conditions.hours:
+                    proposal = self.propose_threshold(dt)
+
+            self.dispatch_threshold.set_threshold(proposal, dt)
 
 
 @dataclass
@@ -222,7 +324,7 @@ class ThermalStorageController(StorageController):
     meter: ThermalLoadFlexMeter = None
     dispatch_on: str = 'equivalent_thermal_energy'
 
-    def set_limit(
+    def set_threshold(
             self,
             dt: datetime
     ):
@@ -236,11 +338,11 @@ class ThermalStorageController(StorageController):
         limiting_threshold_idx = forecast['other_electrical_energy'].idxmax()
         forecast['gross_mixed_electrical_thermal'] = \
             forecast['other_electrical_energy'] + forecast['equivalent_thermal_energy']
-        proposed_limit = PeakShaveTools.sub_load_peak_shave_limit(
+        proposed_threshold = PeakShaveTools.sub_load_peak_shave_limit(
             forecast,
             limiting_threshold_idx,
             self.equipment.available_energy,
             'gross_mixed_electrical_thermal',
             'equivalent_thermal_energy'
         )
-        self.dispatch_threshold = max(self.dispatch_threshold, proposed_limit)
+        self.dispatch_threshold.set_threshold(proposed_threshold)

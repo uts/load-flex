@@ -1,4 +1,5 @@
 from datetime import timedelta, datetime
+import pandas as pd
 
 from portfolio.utils.data_utils import s3BucketManager, CacheManager
 import os
@@ -7,18 +8,23 @@ from ts_tariffs.sites import Site, Meters
 from ts_tariffs.tariffs import TariffRegime
 
 from controllers import (
-    SimpleBatteryTOUShiftController,
     SimpleBatteryPeakShaveController,
-    NonChargeHoursCondition,
-    NonDischargeHoursCondition,
+    HoursConstraint,
+    PeakShaveDispatchThreshold,
+    PeakShaveTOUDispatchThreshold,
+    ExplicitCapsThreshold, ThresholdConditions, TouWithPeakShaveController
 )
 from local_data.local_data import aws_credentials, project_root
 from metering import PowerFlexMeter
 
 from storage import Battery
-from time_series_utils import PerfectForcaster, Scheduler
+from time_series_utils import PerfectForcaster, Scheduler, SpecificEvents, PeriodicEvents, SpecificHourEvents
 
 from matplotlib import pyplot as plt
+
+
+pd.options.display.float_format = '{:20,.2f}'.format
+
 
 bucket_str = 'race-abattoir-load-flex'
 cache_folder = os.path.join(project_root, '../local_data/s3_caching')
@@ -91,7 +97,15 @@ site = Site(
 )
 
 forecaster = PerfectForcaster(timedelta(hours=24))
-scheduler = Scheduler(datetime(2021, 7, 1, 7), timedelta(hours=24))
+first_threshold_set_times = SpecificEvents(tuple([meter.first_datetime()]))
+daily_threshold_set_times = SpecificHourEvents(
+    hours=tuple([7, 9]),
+    all_days=True
+)
+
+scheduler = Scheduler(
+    [first_threshold_set_times, daily_threshold_set_times]
+)
 
 battery = Battery(
     'battery',
@@ -101,19 +115,42 @@ battery = Battery(
     1.0,
     state_of_charge=1.0,
 )
+
+charge_hours = tuple((*range(0, 7), *range(22, 24)))
+discharge_hours = tuple(range(7, 22))
+
 dispatch_conditions = [
-    NonChargeHoursCondition(tuple(range(7, 22))),
-    NonDischargeHoursCondition(tuple(range(22, 24))),
-    NonDischargeHoursCondition(tuple(range(0, 7)))
+    HoursConstraint(
+        charge_hours,
+        discharge_hours,
+    )
 ]
-controller = SimpleBatteryTOUShiftController(
+
+charge_conds = ThresholdConditions(
+    charge_hours,
+    meter.max('demand_energy')
+)
+discharge_conds = ThresholdConditions(
+    discharge_hours,
+    cap=None
+)
+
+threshold = PeakShaveTOUDispatchThreshold(
+    0.0,
+    0.0,
+)
+
+controller = TouWithPeakShaveController(
     'battery controller',
     battery,
     forecaster,
     scheduler,
     dispatch_conditions,
     meter,
-    dispatch_on='demand_energy'
+    dispatch_on='demand_energy',
+    dispatch_threshold=threshold,
+    charge_conditions=charge_conds,
+    discharge_conditions=discharge_conds
 )
 
 controller.dispatch()
@@ -124,15 +161,25 @@ site.add_meter(
     )
 )
 
-plt.plot(site.meters['JBS'].tseries['demand_energy'])
-plt.plot(site.meters['JBS_flexed'].tseries['demand_energy'])
-plt.plot(site.meters['JBS'].dispatch_ts['dispatch_threshold'])
+plt.plot(site.meters['JBS'].tseries['demand_energy'], color='blue', label='base')
+plt.plot(site.meters['JBS_flexed'].tseries['demand_energy'], color='green', label='flexed')
+plt.plot(site.meters['JBS'].dispatch_ts['dispatch_threshold'], color='gray', label='threshold')
+plt.legend()
 plt.show()
 
+print(site.meters['JBS_flexed'].tseries['demand_energy'].max())
 
 site.calculate_bill()
-for bill_name, bill in site.bills.items():
-    for charge, amount in bill.itemised_totals.items():
-        print(f'Charge: {charge}, Amount {round(amount, 2):,}')
+
+baseline_bill = pd.Series(site.bills['JBS'].itemised_totals)
+flexed_bill = pd.Series(site.bills['JBS_flexed'].itemised_totals)
+
+print(baseline_bill)
+print(flexed_bill)
+comparison = baseline_bill.compare(flexed_bill, keep_shape=True)
+print(comparison.diff(axis=1).round())
+
+
+
 
 

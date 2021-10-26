@@ -1,27 +1,94 @@
 from abc import ABC, abstractmethod
 from pydantic import BaseModel
-from typing import Union, List
+from typing import Union, List, Tuple
 from numbers import Number
 import pandas as pd
 import numpy as np
 from datetime import timedelta, datetime
 from typing import Type
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import calendar
+
+WEEKEND_DAYS = ['saturday', 'sunday']
+ALL_DAYS = tuple([x.lower() for x in list(calendar.day_name)])
+WEEKDAYS = tuple([x for x in ALL_DAYS if x not in WEEKEND_DAYS])
+
+@dataclass
+class EventOccurrence(ABC):
+    @abstractmethod
+    def is_due(self, dt: datetime):
+        pass
+
+
+@dataclass
+class PeriodicEvents(EventOccurrence):
+    start_dt: datetime
+    period: timedelta
+    next_periodic_event: datetime = field(init=False)
+
+    def __post_init__(self):
+        self.next_periodic_event = self.start_dt
+
+    def is_due(self, dt):
+        due = False
+        if dt >= self.next_periodic_event:
+            due = True
+            self.next_periodic_event = dt + self.period
+        return due
+
+
+@dataclass
+class SpecificEvents(EventOccurrence):
+    events: Tuple[datetime]
+
+    def is_due(self, dt):
+        return dt in self.events
+
+
+@dataclass
+class SpecificHourEvents(EventOccurrence):
+    hours: Tuple[int]
+    monday: bool = False
+    tuesday: bool = False
+    wednesday: bool = False
+    thursday: bool = False
+    friday: bool = False
+    saturday: bool = False
+    sunday: bool = False
+
+    all_days: bool = False
+    weekends: bool = False
+    weekdays: bool = False
+
+    def __post_init__(self):
+        if self.all_days:
+            for day in ALL_DAYS:
+                setattr(self, day, True)
+        if self.weekends:
+            for day in WEEKEND_DAYS:
+                setattr(self, day, True)
+        if self.weekdays:
+            for day in WEEKDAYS:
+                setattr(self, day, True)
+
+
+    def is_due(self, dt: datetime):
+        due = False
+        weekday = dt.strftime('%A').lower()
+        if getattr(self, weekday):
+            if dt.hour in self.hours:
+                due = True
+        return due
 
 
 @dataclass
 class Scheduler:
-    start_dt: datetime
-    interval: timedelta
-
-    def __post_init__(self):
-        self.next_event_due = self.start_dt
+    event_occurrences: List[EventOccurrence]
 
     def event_due(self, dt: datetime) -> bool:
         due = False
-        if dt >= self.next_event_due:
-            due = True
-            self.next_event_due = dt + self.interval
+        for occurrence in self.event_occurrences:
+            due = True if occurrence.is_due(dt) else due
         return due
 
 

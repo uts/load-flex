@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 from ts_tariffs.sites import MeterData
 
+from equipment import Dispatch
+
 ELECTRICITY_METER_COLS = (
     'demand_energy',
     'demand_power',
@@ -86,15 +88,20 @@ class DispatchFlexMeter(MeterData):
     def update_dispatch(
             self,
             dt: datetime,
-            charge: float,
-            discharge: float,
-            other: Dict[str, float] = None
+            dispatch: Dispatch,
+            dispatch_on: str,
+            other: Dict[str, float] = None,
+            return_net = False
     ):
-        self.dispatch_ts.loc[dt, 'charge'] = charge
-        self.dispatch_ts.loc[dt, 'discharge'] = discharge
+        self.dispatch_ts.loc[dt, 'charge'] = dispatch.charge
+        self.dispatch_ts.loc[dt, 'discharge'] = dispatch.discharge
+        self.dispatch_ts.loc[dt, 'flexed_net'] = \
+            self.tseries.loc[dt, dispatch_on] - dispatch.net_value
         if other:
             for key, value in other.items():
                 self.dispatch_ts.loc[dt, key] = value
+        if return_net:
+            return self.dispatch_ts.loc[dt, 'flexed_net']
 
 
 @dataclass
@@ -114,7 +121,7 @@ class PowerFlexMeter(DispatchFlexMeter):
          change in demand energy
         """
         df = self.tseries.copy()
-        df['demand_energy'] += self.dispatch_ts[['charge', 'discharge']].sum(axis=1)
+        df['demand_energy'] = self.dispatch_ts['flexed_net']
         df['demand_power'] = Converter.energy_to_power(
             df['demand_energy'],
             self.sample_rate / timedelta(hours=1)

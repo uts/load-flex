@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Tuple
 
-from equipment import Storage
+from equipment import Storage, Dispatch
 from state_models import StateBasedProperty
 
 REPORT_ON = (
@@ -21,29 +21,28 @@ THERMAL_REPORT_ON = (
 class Battery(Storage):
     report_on: Tuple[str] = field(default=REPORT_ON, init=False)
 
-    def update_state(self, energy: float):
-        if energy > 0:
-            # Apply efficiency on charge only
-            energy = self.round_trip_efficiency * energy
-        self.state_of_charge += energy / self.storage_capacity
+    def update_state(self, dispatch: Dispatch):
+        # Apply efficiency on charge only
+        delta_energy = \
+            self.round_trip_efficiency * dispatch.charge \
+            - dispatch.discharge
+        self.state_of_charge += delta_energy / self.storage_capacity
 
-    def energy_request(self, energy) -> float:
-        # Negative energy indicates discharge
-        # Positive energy indicate charge
-        if energy < 0:
-            energy_exchange = - min(
-                abs(energy),
+    def dispatch_request(self, proposal: Dispatch) -> Dispatch:
+        dispatch = Dispatch(
+            charge=min(
+                proposal.charge,
+                self.nominal_charge_capacity,
+                self.available_storage
+            ),
+            discharge=min(
+                proposal.discharge,
                 self.nominal_discharge_capacity,
-                self.available_energy
+                self.available_energy,
             )
-        else:
-            energy_exchange = min(
-                energy,
-                self.available_storage,
-                self.nominal_charge_capacity
-            )
-        self.update_state(energy_exchange)
-        return energy_exchange
+        )
+        self.update_state(dispatch)
+        return dispatch
 
 
 @dataclass
@@ -69,26 +68,28 @@ class ThermalStorage(Storage):
         # Todo: update when model is written
         return self.charging_cop_model.calculate(self)
 
-    def update_state(self, energy):
-        if energy > 0:
-            # Apply efficiency on charge only
-            energy = self.round_trip_efficiency * energy
-        self.state_of_charge += energy / self.storage_capacity
+    def update_state(self, dispatch: Dispatch):
+        # Todo: update when cop model is written
+        # Apply efficiency on charge only
+        delta_energy = \
+            self.round_trip_efficiency * dispatch.charge \
+            + dispatch.discharge
+        self.state_of_charge += delta_energy / self.storage_capacity
 
-    def energy_request(self, energy) -> float:
-        # Negative energy indicates discharge
-        # Positive energy indicate charge
-        if energy < 0:
-            energy_exchange = - min(
-                abs(energy),
+    def dispatch_request(self, proposal: Dispatch) -> Dispatch:
+        # Todo: update when discharge model is written
+        dispatch = Dispatch(
+            charge=min(
+                proposal.charge,
                 self.nominal_discharge_capacity,
                 self.available_energy
-            )
-        else:
-            energy_exchange = min(
-                energy,
+            ),
+            discharge=min(
+                proposal.discharge,
                 self.available_storage,
                 self.nominal_charge_capacity
             )
-        self.update_state(energy_exchange)
-        return energy_exchange
+        )
+        self.update_state(dispatch)
+        return dispatch
+

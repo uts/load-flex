@@ -9,6 +9,54 @@ from time_series_utils import Forecaster
 
 
 @dataclass
+class Dispatch:
+    """ Representation of dispatch(charge or discharge) represented
+    as positive floats
+
+    Charge and discharge are enforced as mutually exclusive in terms of their
+    float values being above zero (I.e. Discharge should never occur at the
+    same time as charge)
+    """
+    charge: float
+    discharge: float
+
+    @property
+    def net_value(self):
+        """ Representation of dispatch as single float where positive indicates
+        discharge and negative indicates charge
+        """
+        return self.discharge - self.charge
+
+    @property
+    def valid_dispatch(self) -> bool:
+        """ Enforces property that charge and discharge are mutually exclusive.
+        Null charge or discharge is expressed as float of value 0.0
+        """
+        if not min(self.charge, self.discharge) == 0.0:
+            raise ValueError(
+                'DispatchProposal attributes charge or discharge cannot'
+                ' both be greater than 0.0'
+            )
+        elif self.charge < 0.0 or self.discharge < 0.0:
+            raise ValueError(
+                'DispatchProposal attributes charge or discharge cannot'
+                ' be negative'
+            )
+        else:
+            return True
+
+    @classmethod
+    def from_raw_float(cls, proposal):
+        """ Create instance from raw float where positive value
+        is interpreted as dispatch and negative dispatch interpreted as charge
+        """
+        return cls(
+            charge=-min(0.0, proposal),
+            discharge=max(0.0, proposal)
+        )
+
+
+@dataclass
 class EquipmentMetadata:
     name: str
     capital_cost: float
@@ -24,7 +72,7 @@ class Equipment(ABC):
         return {x: getattr(self, x) for x in self.report_on}
 
     @abstractmethod
-    def energy_request(self, energy) -> float:
+    def dispatch_request(self, energy) -> float:
         pass
 
     @abstractmethod
@@ -49,7 +97,7 @@ class Storage(Equipment):
         return self.storage_capacity * (1 - self.state_of_charge)
 
     @abstractmethod
-    def energy_request(self, energy) -> float:
+    def dispatch_request(self, proposal) -> Dispatch:
         pass
 
     @abstractmethod
@@ -75,5 +123,3 @@ class BasicDispatcher(Dispatcher):
         for plant in self.equipment:
             plant.dispatch()
             self.remaining_demand_arr -= plant.dispatch_arr
-
-
