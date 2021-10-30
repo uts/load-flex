@@ -62,6 +62,7 @@ class StorageController(ABC):
         proposal = Dispatch.from_raw_float(raw_dispatch_proposal)
         for condition in self.other_dispatch_constraints:
             proposal = condition.limit_dispatch(demand_scenario, proposal)
+
         return proposal
 
     def dispatch(self):
@@ -71,6 +72,7 @@ class StorageController(ABC):
                     DemandScenario(demand[self.dispatch_on], dt)
                 )
             dispatch = self.equipment.dispatch_request(dispatch_proposal)
+            self.dispatch_schedule.validate_dispatch(dispatch, dt)
             reportables = {
                 'charge_setpoint': self.setpoint.charge_setpoint,
                 'discharge_setpoint': self.setpoint.discharge_setpoint,

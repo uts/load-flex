@@ -90,6 +90,17 @@ class DispatchSchedule:
         which = 'universal' if self.both(dt) else which
         return which
 
+    def validate_dispatch(self, dispatch: Dispatch, dt: datetime):
+        error_msg = 'Dispatch {} value must be zero outside {} schedule. ' \
+                    'Error caught at datetime {}'.format
+        dt_format = '%Y/%m/%d %H:%M'
+        if dispatch.charge:
+            if not self.charge(dt):
+                raise ValueError(error_msg('charge', 'charge', dt.strftime(dt_format)))
+        if dispatch.discharge:
+            if not self.discharge(dt):
+                raise ValueError(error_msg('discharge', 'discharge', dt.strftime(dt_format)))
+
 
 @dataclass
 class SetPointSchedule:
