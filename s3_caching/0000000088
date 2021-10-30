@@ -1,0 +1,158 @@
+{
+  "name": "JBS",
+  "metering_sample_rate": {
+    "minutes": 30
+  },
+  "charges": [
+    {
+      "name": "retail_tou",
+      "charge_type": "TOUCharge",
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106,
+      "tou": {
+        "time_bins": [
+          0,
+          7,
+          21,
+          24
+        ],
+        "bin_rates": [
+          0.05015,
+          0.071508,
+          0.05015
+        ],
+        "bin_labels": [
+          "off-peak",
+          "peak",
+          "off-peak"
+        ]
+      }
+    },
+    {
+      "name": "lrecs",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.006619,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106
+    },
+    {
+      "name": "srecs",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.01129,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106
+    },
+    {
+      "name": "connection_tariff",
+      "charge_type": "ConnectionCharge",
+      "rate": 316.129,
+      "consumption_unit": "day",
+      "frequency_applied": "day",
+      "rate_unit": "dollars / day",
+      "calculate_on": "datetime",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "tuos_energy",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.01087,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106
+    },
+    {
+      "name": "ICC11B_energy",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.0019,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "ICC11B_demand",
+      "charge_type": "DemandCharge",
+      "consumption_unit": "kVA",
+      "rate": 0.862,
+      "frequency_applied": "month",
+      "rate_unit": "dollars / kVA / month",
+      "calculate_on": "demand_apparent",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "ICC11B_location",
+      "charge_type": "DemandCharge",
+      "consumption_unit": "kW",
+      "rate": 1.196,
+      "frequency_applied": "month",
+      "rate_unit": "dollars / kW / month",
+      "calculate_on": "demand_power",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "duos_capacity",
+      "charge_type": "CapacityCharge",
+      "consumption_unit": "kVA",
+      "capacity": 12204.0,
+      "rate": 0.392,
+      "frequency_applied": "month",
+      "rate_unit": "dollars / kVA / month",
+      "calculate_on": "demand_apparent",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "aemo_market_energy_fee",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.000549,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106
+    },
+    {
+      "name": "aemo_market_daily_fee",
+      "charge_type": "ConnectionCharge",
+      "rate": 0.003692,
+      "consumption_unit": "day",
+      "frequency_applied": "day",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "aemo_market_ancillary_fee",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.00119,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.01106
+    },
+    {
+      "name": "metering_charge",
+      "charge_type": "ConnectionCharge",
+      "rate": 180.9,
+      "consumption_unit": "month",
+      "frequency_applied": "month",
+      "rate_unit": "dollars / month",
+      "calculate_on": "datetime",
+      "adjustment_factor": 1.0
+    },
+    {
+      "name": "prof_utility_board_management",
+      "charge_type": "SingleRateCharge",
+      "rate": 0.0003,
+      "consumption_unit": "kWh",
+      "rate_unit": "dollars / kWh",
+      "calculate_on": "demand_energy",
+      "adjustment_factor": 1.0
+    }
+  ]
+}

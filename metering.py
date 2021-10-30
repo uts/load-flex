@@ -90,7 +90,7 @@ class DispatchFlexMeter(MeterData):
             dt: datetime,
             dispatch: Dispatch,
             dispatch_on: str,
-            other: Dict[str, float] = None,
+            other: Dict[str, Union[float, str]] = None,
             return_net = False
     ):
         self.dispatch_ts.loc[dt, 'charge'] = dispatch.charge
