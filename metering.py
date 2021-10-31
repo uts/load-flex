@@ -143,7 +143,8 @@ class PowerFlexMeter(DispatchFlexMeter):
                 name,
                 self.flexed_meter_ts,
                 self.sample_rate,
-                column_map
+                column_map,
+                self.plot_configs
             )
 
 
@@ -222,7 +223,8 @@ class ThermalLoadFlexMeter(
                 name,
                 self.flexed_meter_ts,
                 self.sample_rate,
-                column_map
+                column_map,
+                self.plot_configs
             )
 
     @classmethod
@@ -247,5 +249,6 @@ class ThermalLoadFlexMeter(
             tseries,
             electrical_meter.sample_rate,
             electrical_meter.units,
-            thermal_properties
+            electrical_meter.plot_configs,
+            thermal_properties,
         )

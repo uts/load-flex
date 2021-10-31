@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Union, Tuple
+from datetime import datetime, timedelta
+from typing import Union, Tuple, List
+
+from ts_tariffs.tariffs import TOUCharge, DemandCharge
 
 from equipment import Dispatch
 from time_series_utils import EventSchedule, PeriodSchedule
@@ -11,6 +15,7 @@ from time_series_utils import EventSchedule, PeriodSchedule
 class DemandScenario:
     demand: float
     dt: datetime
+    setpoint: SetPoint
 
 
 @dataclass
@@ -19,50 +24,9 @@ class DispatchConstraint(ABC):
     def limit_dispatch(
             self,
             demand_scenario: DemandScenario,
-            proposal: Dispatch
+            proposal: Dispatch,
     ) -> Dispatch:
         pass
-
-
-# @dataclass
-# class DemandChargeVsTouPeakConstraint(DispatchConstraint):
-#     tou_tariff: TOUCharge
-#     demand_tariff: DemandCharge
-#     sample_rate: timedelta
-#
-#     @property
-#     def demand_vs_tou_breakeven_point(self) -> float:
-#         """ Breakeven point: The quantum of increased demand (as energy) in a
-#         single timestep where the cost of the increase in the peak is equal to
-#         the savings from TOU shifting (peak to offpeak) is equivalent
-#
-#         Answers the question: When is it cost effective to increase peak demand during
-#         offpeak times for the sake of TOU load shifting?
-#
-#         * NOT A VERY SMART OPTIMISER:
-#          - Assumes energy used to charge in offpeak is always discharged as peak tou
-#          - assumes non-tou based demand charge
-#         """
-#         tou_shift_savings = \
-#             max(self.tou_tariff.tou.bin_rates) - min(self.tou_tariff.tou.bin_rates)
-#         sample_rate_hours = self.sample_rate / timedelta(hours=1)
-#         return tou_shift_savings * sample_rate_hours / self.demand_tariff.rate
-#
-#     def limit_dispatch(
-#             self,
-#             demand_scenario: DemandScenario,
-#             proposal: Dispatch
-#     ) -> Dispatch:
-#         """ Check if charging will increase peak for demand charge period - if yes, check if
-#         it is economical to do so by calculating balance of TOU and demand tariffs. If not
-#         economical, throttle charge rate to the point where it is economical
-#         """
-#         breach = max(
-#             0.0,
-#             demand_scenario.demand + proposal.charge - controller.setpoint.value
-#         )
-#         proposal.charge = min(self.demand_vs_tou_breakeven_point, breach)
-#         return proposal
 
 
 @dataclass
@@ -71,6 +35,7 @@ class DispatchSchedule:
     """
     charge_schedule: PeriodSchedule
     discharge_schedule: PeriodSchedule
+    allow_non_scheduled_dispatch: bool = False
 
     def charge(self, dt: datetime):
         return self.charge_schedule.period_active(dt)
@@ -91,15 +56,16 @@ class DispatchSchedule:
         return which
 
     def validate_dispatch(self, dispatch: Dispatch, dt: datetime):
-        error_msg = 'Dispatch {} value must be zero outside {} schedule. ' \
-                    'Error caught at datetime {}'.format
-        dt_format = '%Y/%m/%d %H:%M'
-        if dispatch.charge:
-            if not self.charge(dt):
-                raise ValueError(error_msg('charge', 'charge', dt.strftime(dt_format)))
-        if dispatch.discharge:
-            if not self.discharge(dt):
-                raise ValueError(error_msg('discharge', 'discharge', dt.strftime(dt_format)))
+        if not self.allow_non_scheduled_dispatch:
+            error_msg = 'Dispatch {} value must be zero outside {} schedule. ' \
+                        'Error caught at datetime {}'.format
+            dt_format = '%Y/%m/%d %H:%M'
+            if dispatch.charge:
+                if not self.charge(dt):
+                    raise ValueError(error_msg('charge', 'charge', dt.strftime(dt_format)))
+            if dispatch.discharge:
+                if not self.discharge(dt):
+                    raise ValueError(error_msg('discharge', 'discharge', dt.strftime(dt_format)))
 
 
 @dataclass
@@ -119,7 +85,7 @@ class SetPointSchedule:
             self.discharge = EventSchedule([])
 
     def universal_due(self, dt: datetime):
-        return self.charge.event_due(dt)
+        return self.universal.event_due(dt)
 
     def charge_due(self, dt: datetime):
         return self.charge.event_due(dt)
@@ -176,13 +142,12 @@ class SetPoint(ABC):
             'charge': min(0.0, demand_scenario.demand - self.charge_setpoint),
             'discharge': max(0.0, demand_scenario.demand -self.discharge_setpoint),
         }
-        x =schedule.which_setpoint(demand_scenario.dt)
         return setpoints[schedule.which_setpoint(demand_scenario.dt)]
 
     @abstractmethod
     def set(
             self,
-            proposal: SetPointProposal,
+            setpoint_proposal: SetPointProposal,
             dt: datetime = None
     ):
         pass
@@ -192,7 +157,20 @@ class SetPoint(ABC):
 class PeakShaveSetPoint(SetPoint):
     def set(
             self,
-            proposal: SetPointProposal,
+            setpoint_proposal: SetPointProposal,
+            dt: datetime = None
+    ):
+        """ Unconstrained peak shaving
+        """
+        if setpoint_proposal.universal:
+            self.universal_setpoint = setpoint_proposal.universal
+
+
+@dataclass
+class ConservativePeakShaveSetPoint(SetPoint):
+    def set(
+            self,
+            setpoint_proposal: SetPointProposal,
             dt: datetime = None
     ):
         """ Adjusts universal setpoint according to proposal and historical maximum.
@@ -204,28 +182,50 @@ class PeakShaveSetPoint(SetPoint):
         energy required to achieve the target peak - i.e. there is more likelihood of energy
         being available
         """
-        if proposal:
+        if setpoint_proposal.universal:
             self.universal_setpoint = max(
-                proposal.universal,
+                setpoint_proposal.universal,
                 self.historical_peak_demand
             )
+
+
+@dataclass
+class TouPeakShaveComboSetPoint(SetPoint):
+    def set(
+            self,
+            setpoint_proposal: SetPointProposal,
+            dt: datetime = None
+    ):
+        """ Adjusts charge setpoint according to proposal and historical maximum.
+
+        This strategy constrains charging to prevent increased peak demand
+        """
+
+        if setpoint_proposal.charge:
+            self.charge_setpoint = min(
+                setpoint_proposal.charge,
+                self.historical_peak_demand
+            )
+        if setpoint_proposal.discharge:
+            self.discharge_setpoint = setpoint_proposal.discharge
+
 
 
 @dataclass
 class GenericSetPoint(SetPoint):
     def set(
             self,
-            proposal: SetPointProposal,
+            setpoint_proposal: SetPointProposal,
             dt: datetime = None
     ):
         """ Accepts whatever setpoints are proposed
         """
-        if proposal.charge:
-            self.charge_setpoint = proposal.charge
-        if proposal.discharge:
-            self.discharge_setpoint = proposal.discharge
-        if proposal.universal:
-            self.universal_setpoint = proposal.universal
+        if setpoint_proposal.charge:
+            self.charge_setpoint = setpoint_proposal.charge
+        if setpoint_proposal.discharge:
+            self.discharge_setpoint = setpoint_proposal.discharge
+        if setpoint_proposal.universal:
+            self.universal_setpoint = setpoint_proposal.universal
 
 
 @dataclass

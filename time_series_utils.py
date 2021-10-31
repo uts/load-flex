@@ -92,6 +92,9 @@ class EventSchedule:
     event_occurrences: List[EventOccurrence]
     always_due: bool = False
 
+    def add_event(self, event: EventOccurrence):
+        self.event_occurrences.append(event)
+
     def event_due(self, dt: datetime) -> bool:
         if self.always_due:
             due = True
@@ -121,8 +124,12 @@ class DailyPeriod(Period, DailyHours):
 
 @dataclass
 class PeriodSchedule:
-    periods: List[Period]
+    periods: List[Period] = None
     always_active: bool = False
+
+    def __post_init__(self):
+        if not self.periods:
+            self.periods = []
 
     def period_active(self, dt: datetime) -> bool:
         if self.always_active:

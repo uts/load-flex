@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List
 import numpy as np
+from ts_tariffs.tariffs import DemandCharge, TOUCharge
 
 from dispatch_constraints import (
     DispatchConstraint,
@@ -12,11 +13,11 @@ from dispatch_constraints import (
     SetPointProposal,
     SetPoint,
     PeakShaveSetPoint,
-    DemandScenario,
+    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint,
 )
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
-from time_series_utils import Forecaster
+from time_series_utils import Forecaster, SpecificEvents
 from optimisers import PeakShave, TOUShiftingCalculator
 from equipment import Storage, Dispatch
 
@@ -39,12 +40,6 @@ class StorageController(ABC):
     setpoint: SetPoint
     dispatch_on: str
 
-    def __post_init__(self):
-        # Initialise setpoints
-        self.update_setpoint(
-            self.meter.first_datetime(),
-        )
-
     @abstractmethod
     def update_setpoint(
             self,
@@ -54,6 +49,19 @@ class StorageController(ABC):
         """
         pass
 
+    def initialise_setpoint(self, dt: datetime):
+        setpoint_schedule_event = SpecificEvents(tuple([dt]))
+        event_setters = {
+            'charge': self.setpoint.schedule.charge,
+            'discharge': self.setpoint.schedule.discharge,
+            'universal': self.setpoint.schedule.universal,
+        }
+        which_event = self.dispatch_schedule.which_setpoint(dt)
+        event_setters[which_event].add_event(
+            setpoint_schedule_event
+        )
+        self.update_setpoint(dt)
+
     def dispatch_proposal(self, demand_scenario: DemandScenario) -> float:
         raw_dispatch_proposal = self.setpoint.raw_dispatch_proposal(
             demand_scenario,
@@ -61,7 +69,10 @@ class StorageController(ABC):
         )
         proposal = Dispatch.from_raw_float(raw_dispatch_proposal)
         for condition in self.other_dispatch_constraints:
-            proposal = condition.limit_dispatch(demand_scenario, proposal)
+            proposal = condition.limit_dispatch(
+                demand_scenario,
+                proposal,
+            )
 
         return proposal
 
@@ -69,7 +80,7 @@ class StorageController(ABC):
         for dt, demand in self.meter.tseries.iterrows():
             self.update_setpoint(dt)
             dispatch_proposal = self.dispatch_proposal(
-                    DemandScenario(demand[self.dispatch_on], dt)
+                    DemandScenario(demand[self.dispatch_on], dt, self.setpoint)
                 )
             dispatch = self.equipment.dispatch_request(dispatch_proposal)
             self.dispatch_schedule.validate_dispatch(dispatch, dt)
@@ -92,15 +103,16 @@ class StorageController(ABC):
 
 
 @dataclass
-class BatteryPeakShaveController(StorageController):
+class PeakShaveBatteryController(StorageController):
     setpoint: PeakShaveSetPoint
     equipment: Battery
 
     def __post_init__(self):
-        if not self.setpoint.schedule.universal:
-            raise TypeError('Universal setpoint schedule missing: '
+        if not self.setpoint.schedule.universal.event_occurrences:
+            raise TypeError('Universal setpoint schedule events missing: '
                             'Peak shave setpoint requires schedule'
-                            ' with universal schedule')
+                            ' with events in universal schedule')
+        self.initialise_setpoint(self.meter.first_datetime())
 
     def propose_setpoint(self, dt: datetime):
         forecast = self.forecasters.universal.look_ahead(
@@ -123,7 +135,12 @@ class BatteryPeakShaveController(StorageController):
 
 
 @dataclass
-class TouController(StorageController):
+class TouBatteryController(StorageController):
+    setpoint: GenericSetPoint
+    equipment: Battery
+
+    def __post_init__(self):
+        self.initialise_setpoint(self.meter.first_datetime())
 
     def propose_charge_setpoint(self, dt: datetime):
         forecast = self.forecasters.charge.look_ahead(
@@ -161,6 +178,15 @@ class TouController(StorageController):
 
 
 @dataclass
+class TouPeakShaveComboBatteryController(TouBatteryController):
+    setpoint: TouPeakShaveComboSetPoint
+    equipment: Battery
+
+    def __post_init__(self):
+        self.initialise_setpoint(self.meter.first_datetime())
+
+
+@dataclass
 class ThermalStoragePeakShaveController(StorageController):
     setpoint: PeakShaveSetPoint
     equipment: ThermalStorage
@@ -193,5 +219,4 @@ class ThermalStoragePeakShaveController(StorageController):
     ):
         proposal = SetPointProposal()
         proposal.universal = self.propose_setpoint(dt)
-
         self.setpoint.set(proposal, dt)
