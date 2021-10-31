@@ -90,15 +90,14 @@ class StorageController(ABC):
                 'universal_setpoint': self.setpoint.universal_setpoint,
                 **self.equipment.status()
             }
-            flexed_net = self.meter.update_dispatch(
+            self.meter.update_dispatch(
                 dt,
                 dispatch,
                 self.dispatch_on,
                 reportables,
-                return_net=True
             )
             self.setpoint.update_historical_net_demand(
-                flexed_net
+                demand.loc[dt, self.dispatch_on] - dispatch.net_value
             )
 
 

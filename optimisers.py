@@ -37,8 +37,8 @@ class PeakShave(SetPointOptimiser):
     ) -> float:
         for i, row in sorted_df.iloc[:max_idx:-1].iterrows():
             exposed_gross = sorted_df[gross_col].values - row[gross_col]
-            exposed_gross = np.where(exposed_gross < 0, 0, exposed_gross)
-            exposed_sub = np.clip(sorted_df[sub_col].values, 0, exposed_gross)
+            exposed_gross = np.where(exposed_gross < 0.0, 0.0, exposed_gross)
+            exposed_sub = np.clip(sorted_df[sub_col].values, 0.0, exposed_gross)
             exposed_sub_area = sum(exposed_sub)
             if exposed_sub_area >= area:
                 return sorted_df[gross_col].iloc[i + 1]

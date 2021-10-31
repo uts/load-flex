@@ -11,7 +11,7 @@ from ts_tariffs.sites import MeterData
 
 from equipment import Dispatch
 
-ELECTRICITY_METER_COLS = (
+POWER_METER_COLS = (
     'demand_energy',
     'demand_power',
     'generation_energy',
@@ -20,9 +20,8 @@ ELECTRICITY_METER_COLS = (
 )
 
 THERMAL_METER_COLS = (
-    'equivalent_thermal_energy',
-    'electrical_energy',
-    'gross_electrical_energy'
+    *POWER_METER_COLS,
+    'subload_energy'
 )
 
 
@@ -70,20 +69,57 @@ class Converter:
     ) -> Union[float, np.ndarray, pd.Series, pd.DataFrame]:
         return electrical * coefficient_of_performance
 
+    @staticmethod
+    def power_meter_from_energy(
+        energy_series: pd.Series,
+        sample_rate: timedelta
+    ):
+        energy_series.rename('demand_energy', inplace=True)
+        df = pd.DataFrame(energy_series)
+        df['demand_power'] = Converter.energy_to_power(
+            df['demand_energy'],
+            sample_rate / timedelta(hours=1)
+        )
+        df['demand_apparent'] = Converter.power_to_apparent(
+            df['demand_power'],
+            df['power_factor']
+        )
+        return df
+
+
 
 @dataclass
 class DispatchFlexMeter(MeterData):
     name: str
-    dispatch_ts: pd.DataFrame = field(init=False)
-    flexed_meter_ts: pd.DataFrame = field(init=False)
+    dispatch_tseries: pd.DataFrame = field(init=False)
+    flexed_tseries: pd.DataFrame = field(init=False)
 
     @abstractmethod
-    def calculate_flexed_demand(
+    def calculate_flexed_tseries(
             self,
             name: str,
             return_new_meter: bool = False,
     ):
         pass
+
+    @abstractmethod
+    def update_dispatch(
+            self,
+            dt: datetime,
+            dispatch: Dispatch,
+            dispatch_on: str,
+            other: Dict[str, Union[float, str]] = None,
+    ):
+        pass
+
+
+@dataclass
+class PowerFlexMeter(DispatchFlexMeter):
+
+    def __post_init__(self):
+        Validator.data_cols(self.tseries, POWER_METER_COLS)
+        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
+        self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
 
     def update_dispatch(
             self,
@@ -91,28 +127,17 @@ class DispatchFlexMeter(MeterData):
             dispatch: Dispatch,
             dispatch_on: str,
             other: Dict[str, Union[float, str]] = None,
-            return_net = False
+            return_net=False
     ):
-        self.dispatch_ts.loc[dt, 'charge'] = dispatch.charge
-        self.dispatch_ts.loc[dt, 'discharge'] = dispatch.discharge
-        self.dispatch_ts.loc[dt, 'flexed_net'] = \
-            self.tseries.loc[dt, dispatch_on] - dispatch.net_value
+        self.dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
+        self.dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
+        flexed_net = self.tseries.loc[dt, dispatch_on] - dispatch.net_value
+        self.dispatch_tseries['flexed_net_energy'] = flexed_net
         if other:
             for key, value in other.items():
-                self.dispatch_ts.loc[dt, key] = value
-        if return_net:
-            return self.dispatch_ts.loc[dt, 'flexed_net']
+                self.dispatch_tseries.loc[dt, key] = value
 
-
-@dataclass
-class PowerFlexMeter(DispatchFlexMeter):
-
-    def __post_init__(self):
-        Validator.data_cols(self.tseries, ELECTRICITY_METER_COLS)
-        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
-        self.flexed_meter_ts = pd.DataFrame(index=self.tseries.index)
-
-    def calculate_flexed_demand(
+    def calculate_flexed_tseries(
             self,
             name,
             return_new_meter: bool = False,
@@ -120,28 +145,21 @@ class PowerFlexMeter(DispatchFlexMeter):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
         """
-        df = self.tseries.copy()
-        df['demand_energy'] = self.dispatch_ts['flexed_net']
-        df['demand_power'] = Converter.energy_to_power(
-            df['demand_energy'],
-            self.sample_rate / timedelta(hours=1)
+        self.flexed_tseries = Converter.power_meter_from_energy(
+            self.dispatch_tseries['flexed_net_energy'],
+            self.sample_rate
         )
-        df['demand_apparent'] = Converter.power_to_apparent(
-            df['demand_power'],
-            df['power_factor']
-        )
-        self.flexed_meter_ts = df
         if return_new_meter:
             column_map = {
                 column: {
                     'ts': column,
                     'units': self.units[column]
                 }
-                for column in ELECTRICITY_METER_COLS
+                for column in POWER_METER_COLS
             }
             return PowerFlexMeter.from_dataframe(
                 name,
-                self.flexed_meter_ts,
+                self.flexed_tseries,
                 self.sample_rate,
                 column_map,
                 self.plot_configs
@@ -150,67 +168,75 @@ class PowerFlexMeter(DispatchFlexMeter):
 
 @dataclass
 class ThermalLoadProperties:
-    charge_as: str
-    discharge_as: str
+    charge_as_thermal: bool
+    discharge_as_thermal: bool
     flex_cop: Union[float, np.ndarray]
     load_cop: Union[float, np.ndarray]
 
 
 @dataclass
-class ThermalLoadFlexMeter(
-    DispatchFlexMeter,
-):
+class ThermalLoadFlexMeter(DispatchFlexMeter):
     thermal_properties: ThermalLoadProperties
+    thermal_tseries: pd.DataFrame = field(init=False)
+    thermal_dispatch_tseries: pd.DataFrame = field(init=False)
+    electrical_dispatch_tseries: pd.DataFrame = field(init=False)
+
+    flexed_tseries: pd.DataFrame = field(init=False)
 
     def __post_init__(self):
         Validator.data_cols(
             self.tseries,
             THERMAL_METER_COLS
         )
-        self.tseries['other_electrical_energy'] = \
-            self.tseries['gross_electrical_energy'] - \
-            self.tseries['electrical_energy']
-        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
-        self.flexed_meter_ts = pd.DataFrame(index=self.tseries.index)
+        self.create_thermal_tseries()
+        self.thermal_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
+        self.electrical_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
+        self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
 
-    def augment_load(
+    def create_thermal_tseries(self):
+        self.thermal_tseries = pd.DataFrame(index=self.tseries.index)
+        self.thermal_tseries['load_cop'] = self.thermal_properties.load_cop
+        self.thermal_tseries['flex_cop'] = self.thermal_properties.flex_cop
+        self.thermal_tseries['thermal_subload_energy'] =\
+            self.tseries['subload_energy'] * self.thermal_tseries['load_cop']
+
+    def update_dispatch(
             self,
-            augmentation,
-            augment_as: str,
-            coeff_of_performance: Union[float, np.ndarray]
+            dt: datetime,
+            dispatch: Dispatch,
+            dispatch_on: str,
+            other: Dict[str, Union[float, str]] = None,
     ):
-        df = self.tseries.copy()
-        if augment_as == 'thermal':
-            df['equivalent_thermal_energy'] += augmentation
-            augmentation = Converter.thermal_to_electrical(
-                augmentation,
-                coeff_of_performance
+        self.thermal_dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
+        self.thermal_dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
+        self.electrical_dispatch_tseries[dt, 'charge'] = Converter.thermal_to_electrical(
+                self.dispatch_tseries['charge'],
+                self.thermal_tseries['flex_cop']
             )
-        else:
-            df['equivalent_thermal_energy'] += Converter.electrical_to_thermal(
-                augmentation,
-                coeff_of_performance
+        self.electrical_dispatch_tseries[dt, 'discharge'] = Converter.thermal_to_electrical(
+                self.dispatch_tseries['discharge'],
+                self.thermal_tseries['load_cop']
             )
+        self.electrical_dispatch_tseries[dt, 'energy_net'] = \
+            self.electrical_dispatch_tseries[dt, 'discharge'] \
+            - self.electrical_dispatch_tseries[dt, 'charge'] \
 
-        df['electrical_energy'] += augmentation
-        df['gross_electrical_energy'] += augmentation
-        self.flexed_meter_ts = df
+        if other:
+            for key, value in other.items():
+                self.dispatch_tseries.loc[dt, key] = value
 
-    def calculate_flexed_demand(
+    def calculate_flexed_tseries(
             self,
             name,
             return_new_meter: bool = False,
     ):
-        self.augment_load(
-            self.dispatch_ts['charge'],
-            self.thermal_properties.charge_as,
-            self.thermal_properties.flex_cop
+        self.flexed_tseries = Converter.power_meter_from_energy(
+            self.tseries['demand_energy'] - self.electrical_dispatch_tseries['energy_net'],
+            self.sample_rate
         )
-        self.augment_load(
-            self.dispatch_ts['discharge'],
-            self.thermal_properties.discharge_as,
-            self.thermal_properties.load_cop
-        )
+        self.flexed_tseries['subload_energy'] =\
+            self.tseries['subload_energy'] - self.electrical_dispatch_tseries['energy_net']
+
         if return_new_meter:
             column_map = {
                 column: {
@@ -221,34 +247,8 @@ class ThermalLoadFlexMeter(
             }
             return ThermalLoadFlexMeter.from_dataframe(
                 name,
-                self.flexed_meter_ts,
+                self.flexed_tseries,
                 self.sample_rate,
                 column_map,
                 self.plot_configs
             )
-
-    @classmethod
-    def from_powerflex_meter(
-            cls,
-            name,
-            electrical_meter: PowerFlexMeter,
-            load_column: str,
-            thermal_properties: ThermalLoadProperties
-    ):
-        tseries = pd.DataFrame(
-            electrical_meter.tseries[load_column],
-            columns=['electrical_energy']
-        )
-        tseries['equivalent_thermal_energy'] = Converter.electrical_to_thermal(
-            tseries['electrical_energy'],
-            thermal_properties.load_cop
-        )
-        tseries['gross_electrical_energy'] = electrical_meter.tseries['demand_energy']
-        return cls(
-            name,
-            tseries,
-            electrical_meter.sample_rate,
-            electrical_meter.units,
-            electrical_meter.plot_configs,
-            thermal_properties,
-        )
