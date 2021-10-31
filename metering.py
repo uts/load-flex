@@ -180,7 +180,6 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
     thermal_tseries: pd.DataFrame = field(init=False)
     thermal_dispatch_tseries: pd.DataFrame = field(init=False)
     electrical_dispatch_tseries: pd.DataFrame = field(init=False)
-
     flexed_tseries: pd.DataFrame = field(init=False)
 
     def __post_init__(self):
@@ -188,6 +187,8 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
             self.tseries,
             THERMAL_METER_COLS
         )
+        self.tseries['balance_energy'] = \
+            self.tseries['demand_energy'] - self.tseries['subload_energy']
         self.create_thermal_tseries()
         self.thermal_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.electrical_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
@@ -197,7 +198,7 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.thermal_tseries = pd.DataFrame(index=self.tseries.index)
         self.thermal_tseries['load_cop'] = self.thermal_properties.load_cop
         self.thermal_tseries['flex_cop'] = self.thermal_properties.flex_cop
-        self.thermal_tseries['thermal_subload_energy'] =\
+        self.thermal_tseries['subload_energy'] =\
             self.tseries['subload_energy'] * self.thermal_tseries['load_cop']
 
     def update_dispatch(

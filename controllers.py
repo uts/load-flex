@@ -190,25 +190,36 @@ class ThermalStoragePeakShaveController(StorageController):
     setpoint: PeakShaveSetPoint
     equipment: ThermalStorage
     meter: ThermalLoadFlexMeter
-    dispatch_on: str = 'equivalent_thermal_energy'
+
+    def __post_init__(self):
+
+        # Add cols for setpoint calcs
+        self.meter.thermal_tseries['gross_mixed_electrical_and_thermal'] =\
+            self.meter.thermal_tseries['subload_energy']\
+            + self.meter.tseries['balance_energy']
 
     def propose_setpoint(self, dt: datetime):
-        forecast = self.forecasters.universal.look_ahead(
+        calc_forecast = self.forecasters.universal.look_ahead(
             self.meter.tseries,
             dt
         )
-        forecast.sort_values('gross_electrical_energy', inplace=True)
-        forecast.reset_index(inplace=True, drop=True)
+        thermal_forecast = self.forecasters.universal.look_ahead(
+            self.meter.thermal_tseries,
+            dt
+        )
+        calc_forecast['gross_mixed_electrical_and_thermal'] \
+            = thermal_forecast['gross_mixed_electrical_and_thermal']
+        calc_forecast['thermal_subload_energy'] = thermal_forecast['subload_energy']
+        calc_forecast.sort_values('demand_energy', inplace=True)
+        calc_forecast.reset_index(inplace=True, drop=True)
 
-        limiting_setpoint_idx = forecast['other_electrical_energy'].idxmax()
-        forecast['gross_mixed_electrical_thermal'] = \
-            forecast['other_electrical_energy'] + forecast['equivalent_thermal_energy']
+        limiting_setpoint_idx = calc_forecast['balance_energy'].idxmax()
         proposal = PeakShave.sub_load_peak_shave_limit(
-            forecast,
+            calc_forecast,
             limiting_setpoint_idx,
             self.equipment.available_energy,
             'gross_mixed_electrical_thermal',
-            'equivalent_thermal_energy'
+            'thermal_subload_energy'
         )
         return proposal
 
