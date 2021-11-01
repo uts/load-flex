@@ -97,7 +97,7 @@ class StorageController(ABC):
                 reportables,
             )
             self.setpoint.update_historical_net_demand(
-                demand.loc[dt, self.dispatch_on] - dispatch.net_value
+                demand[self.dispatch_on] - dispatch.net_value
             )
 
 
@@ -199,17 +199,19 @@ class ThermalStoragePeakShaveController(StorageController):
             + self.meter.tseries['balance_energy']
 
     def propose_setpoint(self, dt: datetime):
+        gross_col = 'gross_mixed_electrical_and_thermal'
+        sub_col = 'thermal_subload_energy'
         calc_forecast = self.forecasters.universal.look_ahead(
             self.meter.tseries,
             dt
-        )
+        ).copy()
         thermal_forecast = self.forecasters.universal.look_ahead(
             self.meter.thermal_tseries,
             dt
-        )
-        calc_forecast['gross_mixed_electrical_and_thermal'] \
-            = thermal_forecast['gross_mixed_electrical_and_thermal']
-        calc_forecast['thermal_subload_energy'] = thermal_forecast['subload_energy']
+        ).copy()
+        calc_forecast[gross_col] \
+            = thermal_forecast[gross_col]
+        calc_forecast[sub_col] = thermal_forecast['subload_energy']
         calc_forecast.sort_values('demand_energy', inplace=True)
         calc_forecast.reset_index(inplace=True, drop=True)
 
@@ -218,8 +220,8 @@ class ThermalStoragePeakShaveController(StorageController):
             calc_forecast,
             limiting_setpoint_idx,
             self.equipment.available_energy,
-            'gross_mixed_electrical_thermal',
-            'thermal_subload_energy'
+            gross_col,
+            sub_col
         )
         return proposal
 

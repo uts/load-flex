@@ -5,22 +5,27 @@ from equipment import Storage, Dispatch
 from state_models import StateBasedProperty
 
 REPORT_ON = (
-        'state_of_charge',
-        'available_energy',
-        'available_storage',
-        'cycle_count'
+    'state_of_charge',
+    'available_energy',
+    'available_storage',
     )
+
+BATTERY_REPORT_ON = (
+    *REPORT_ON,
+    'cycle_count'
+)
+
 THERMAL_REPORT_ON = (
-        'discharge_capacity',
-        'charge_capacity',
-        'charging_cop',
-        *REPORT_ON
-    )
+    'discharge_capacity',
+    'charge_capacity',
+    'charging_cop',
+    *REPORT_ON
+)
 
 
 @dataclass
 class Battery(Storage):
-    report_on: Tuple[str] = field(default=REPORT_ON, init=False)
+    report_on: Tuple[str] = field(default=BATTERY_REPORT_ON, init=False)
     cycle_count: float = 0.0
 
     def update_state(self, dispatch: Dispatch):

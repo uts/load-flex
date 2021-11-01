@@ -123,13 +123,28 @@ class DailyPeriod(Period, DailyHours):
 
 
 @dataclass
+class DateRangePeriod(Period):
+    from_date: datetime
+    to_date: datetime
+
+    def period_active(self, dt: datetime):
+        active = False
+        if self.from_date <= dt <= self.to_date:
+            active = True
+        return active
+
+
+@dataclass
 class PeriodSchedule:
     periods: List[Period] = None
+    pause_period: List[Period] = None
     always_active: bool = False
 
     def __post_init__(self):
         if not self.periods:
             self.periods = []
+        if not self.pause_period:
+            self.pause_period = []
 
     def period_active(self, dt: datetime) -> bool:
         if self.always_active:
@@ -138,7 +153,10 @@ class PeriodSchedule:
             active = False
             for period in self.periods:
                 active = True if period.period_active(dt) else active
+        for pause_period in self.pause_period:
+            active = False if pause_period.period_active(dt) else active
         return active
+
 
 
 @dataclass

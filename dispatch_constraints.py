@@ -75,6 +75,7 @@ class SetPointSchedule:
     charge: EventSchedule = None
     discharge: EventSchedule = None
     universal: EventSchedule = None
+    pause_setpoints: PeriodSchedule = None
 
     def __post_init__(self):
         if not self.universal:
@@ -84,19 +85,22 @@ class SetPointSchedule:
         if not self.discharge:
             self.discharge = EventSchedule([])
 
-    def universal_due(self, dt: datetime):
-        return self.universal.event_due(dt)
+    def pause(self, dt: datetime) -> bool:
+        return self.pause_setpoints.period_active(dt)
 
-    def charge_due(self, dt: datetime):
-        return self.charge.event_due(dt)
+    def universal_due(self, dt: datetime) -> bool:
+        return False if self.pause(dt) else self.universal.event_due(dt)
 
-    def discharge_due(self, dt: datetime):
-        return self.discharge.event_due(dt)
+    def charge_due(self, dt: datetime)-> bool:
+        return False if self.pause(dt) else self.charge.event_due(dt)
 
-    def event_due(self, dt: datetime):
+    def discharge_due(self, dt: datetime)-> bool:
+        return False if self.pause(dt) else self.discharge.event_due(dt)
+
+    def event_due(self, dt: datetime)-> bool:
         return self.charge_due(dt) \
                or self.discharge_due(dt) \
-               or self.universal.event_due(dt)
+               or self.universal_due(dt)
 
 
 @dataclass

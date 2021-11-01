@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta, datetime
-from typing import Union, Dict
+from typing import Union, Dict, List
 from abc import abstractmethod
 
 import pandas as pd
 import numpy as np
-from ts_tariffs.sites import MeterData
+from ts_tariffs.sites import MeterData, MeterPlotConfig
 
 from equipment import Dispatch
 
@@ -72,6 +72,7 @@ class Converter:
     @staticmethod
     def power_meter_from_energy(
         energy_series: pd.Series,
+        power_factor_series: pd.Series,
         sample_rate: timedelta
     ):
         energy_series.rename('demand_energy', inplace=True)
@@ -82,7 +83,7 @@ class Converter:
         )
         df['demand_apparent'] = Converter.power_to_apparent(
             df['demand_power'],
-            df['power_factor']
+            power_factor_series
         )
         return df
 
@@ -91,7 +92,6 @@ class Converter:
 @dataclass
 class DispatchFlexMeter(MeterData):
     name: str
-    dispatch_tseries: pd.DataFrame = field(init=False)
     flexed_tseries: pd.DataFrame = field(init=False)
 
     @abstractmethod
@@ -115,10 +115,11 @@ class DispatchFlexMeter(MeterData):
 
 @dataclass
 class PowerFlexMeter(DispatchFlexMeter):
+    dispatch_tseries: pd.DataFrame = field(init=False)
 
     def __post_init__(self):
         Validator.data_cols(self.tseries, POWER_METER_COLS)
-        self.dispatch_ts = pd.DataFrame(index=self.tseries.index)
+        self.dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
 
     def update_dispatch(
@@ -131,8 +132,9 @@ class PowerFlexMeter(DispatchFlexMeter):
     ):
         self.dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
         self.dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
+        x = self.tseries.loc[dt, dispatch_on]
         flexed_net = self.tseries.loc[dt, dispatch_on] - dispatch.net_value
-        self.dispatch_tseries['flexed_net_energy'] = flexed_net
+        self.dispatch_tseries.loc[dt, 'flexed_net_energy'] = flexed_net
         if other:
             for key, value in other.items():
                 self.dispatch_tseries.loc[dt, key] = value
@@ -147,8 +149,12 @@ class PowerFlexMeter(DispatchFlexMeter):
         """
         self.flexed_tseries = Converter.power_meter_from_energy(
             self.dispatch_tseries['flexed_net_energy'],
+            self.tseries['power_factor'],
             self.sample_rate
         )
+        self.flexed_tseries['generation_energy'] = self.tseries['generation_energy']
+        self.flexed_tseries['power_factor'] = self.tseries['power_factor']
+
         if return_new_meter:
             column_map = {
                 column: {
@@ -168,8 +174,6 @@ class PowerFlexMeter(DispatchFlexMeter):
 
 @dataclass
 class ThermalLoadProperties:
-    charge_as_thermal: bool
-    discharge_as_thermal: bool
     flex_cop: Union[float, np.ndarray]
     load_cop: Union[float, np.ndarray]
 
@@ -210,21 +214,21 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
     ):
         self.thermal_dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
         self.thermal_dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
-        self.electrical_dispatch_tseries[dt, 'charge'] = Converter.thermal_to_electrical(
-                self.dispatch_tseries['charge'],
-                self.thermal_tseries['flex_cop']
+        self.electrical_dispatch_tseries.loc[dt, 'charge'] = Converter.thermal_to_electrical(
+                self.thermal_dispatch_tseries.loc[dt, 'charge'],
+                self.thermal_tseries.loc[dt, 'flex_cop']
             )
-        self.electrical_dispatch_tseries[dt, 'discharge'] = Converter.thermal_to_electrical(
-                self.dispatch_tseries['discharge'],
-                self.thermal_tseries['load_cop']
+        self.electrical_dispatch_tseries.loc[dt, 'discharge'] = Converter.thermal_to_electrical(
+                self.thermal_dispatch_tseries.loc[dt, 'discharge'],
+                self.thermal_tseries.loc[dt, 'load_cop']
             )
-        self.electrical_dispatch_tseries[dt, 'energy_net'] = \
-            self.electrical_dispatch_tseries[dt, 'discharge'] \
-            - self.electrical_dispatch_tseries[dt, 'charge'] \
+        self.electrical_dispatch_tseries.loc[dt, 'energy_net'] = \
+            self.electrical_dispatch_tseries.loc[dt, 'discharge'] \
+            - self.electrical_dispatch_tseries.loc[dt, 'charge'] \
 
         if other:
             for key, value in other.items():
-                self.dispatch_tseries.loc[dt, key] = value
+                self.thermal_dispatch_tseries.loc[dt, key] = value
 
     def calculate_flexed_tseries(
             self,
@@ -233,8 +237,11 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
     ):
         self.flexed_tseries = Converter.power_meter_from_energy(
             self.tseries['demand_energy'] - self.electrical_dispatch_tseries['energy_net'],
+            self.tseries['power_factor'],
             self.sample_rate
         )
+        self.flexed_tseries['generation_energy'] = self.tseries['generation_energy']
+        self.flexed_tseries['power_factor'] = self.tseries['power_factor']
         self.flexed_tseries['subload_energy'] =\
             self.tseries['subload_energy'] - self.electrical_dispatch_tseries['energy_net']
 
@@ -251,5 +258,40 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
                 self.flexed_tseries,
                 self.sample_rate,
                 column_map,
-                self.plot_configs
+                self.plot_configs,
+                self.thermal_properties
             )
+
+    @classmethod
+    def from_dataframe(
+            cls,
+            name: str,
+            df: pd.DataFrame,
+            sample_rate: timedelta,
+            column_map: dict,
+            plot_configs: Union[None, List[MeterPlotConfig]],
+            thermal_properties: ThermalLoadProperties
+    ):
+        units = {}
+        # Create cols according to column_map and cherry pick them for
+        # instantiation of class object
+        for meter_col, data in column_map.items():
+            df[meter_col] = df[data['ts']]
+            units[meter_col] = data['units']
+        return cls(name, df[column_map.keys()], sample_rate, units, plot_configs, thermal_properties)
+
+    @classmethod
+    def from_powerflex_meter(
+            cls,
+            name: str,
+            electrical_meter: PowerFlexMeter,
+            thermal_properties: ThermalLoadProperties
+    ):
+        return cls(
+            name,
+            electrical_meter.tseries,
+            electrical_meter.sample_rate,
+            electrical_meter.units,
+            electrical_meter.plot_configs,
+            thermal_properties
+        )
