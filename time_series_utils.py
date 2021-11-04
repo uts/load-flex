@@ -157,6 +157,11 @@ class PeriodSchedule:
             active = False if pause_period.period_active(dt) else active
         return active
 
+    def add_period(self, period: Period):
+        self.periods.append(period)
+
+    def add_periods(self, new_periods: List[Period]):
+        self.periods.extend(new_periods)
 
 
 @dataclass

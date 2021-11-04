@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 import numpy as np
+from ts_tariffs.sites import MeterData
 from ts_tariffs.tariffs import DemandCharge, TOUCharge
 
 from dispatch_constraints import (
@@ -13,13 +14,14 @@ from dispatch_constraints import (
     SetPointProposal,
     SetPoint,
     PeakShaveSetPoint,
-    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint,
+    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint, SetPointSchedule,
 )
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
-from time_series_utils import Forecaster, SpecificEvents
+from time_series_utils import Forecaster, SpecificEvents, EventSchedule, PeriodSchedule, DateRangePeriod
 from optimisers import PeakShave, TOUShiftingCalculator
 from equipment import Storage, Dispatch
+from wholesale_prices import MarketPrices
 
 
 @dataclass
@@ -62,7 +64,10 @@ class StorageController(ABC):
         )
         self.update_setpoint(dt)
 
-    def dispatch_proposal(self, demand_scenario: DemandScenario) -> float:
+    def demand_at_t(self, dt: datetime):
+        return self.meter.tseries.loc[dt][self.dispatch_on]
+
+    def dispatch_proposal(self, demand_scenario: DemandScenario) -> Dispatch:
         raw_dispatch_proposal = self.setpoint.raw_dispatch_proposal(
             demand_scenario,
             self.dispatch_schedule
@@ -82,7 +87,7 @@ class StorageController(ABC):
             dispatch_proposal = self.dispatch_proposal(
                     DemandScenario(demand[self.dispatch_on], dt, self.setpoint)
                 )
-            dispatch = self.equipment.dispatch_request(dispatch_proposal)
+            dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
             self.dispatch_schedule.validate_dispatch(dispatch, dt)
             reportables = {
                 'charge_setpoint': self.setpoint.charge_setpoint,
@@ -232,3 +237,59 @@ class ThermalStoragePeakShaveController(StorageController):
         proposal = SetPointProposal()
         proposal.universal = self.propose_setpoint(dt)
         self.setpoint.set(proposal, dt)
+
+
+@dataclass
+class WholesalePriceTranchBatteryController(StorageController):
+    market_prices: MarketPrices
+    tranche_energy: float = field(init=False)
+    number_tranches: int = field(init=False)
+
+    def __post_init__(self):
+        if not self.equipment.nominal_charge_capacity == self.equipment.nominal_discharge_capacity:
+            raise ValueError('Note that optimal dispatch for WholesalePriceTranchBatteryController '
+                             'requires that charge and discharge capacities are equal')
+        self.calculate_tranches()
+        # self.initialise_setpoint(self.meter.first_datetime())
+
+
+    def calculate_tranches(self):
+        """Tranches defined by how much energy can be dispatched in a single time step and how
+        much storage capacity the battery has (assume smallest of charge or discharge rates)
+        """
+        time_step_hours = self.meter.sample_rate / timedelta(hours=1)
+        dispatch_rate = min(
+            self.equipment.nominal_charge_capacity,
+            self.equipment.nominal_discharge_capacity
+        )
+
+        self.tranche_energy = dispatch_rate * time_step_hours
+        # Need positive number of whole tranches as they will be allocated
+        # equally to charge and discharge - this will leave remainder unallocated
+        self.number_tranches = int(self.equipment.storage_capacity / self.tranche_energy)
+        if self.number_tranches % 2 != 0:
+            self.number_tranches -= 1
+
+    def set_dispatch_schedule(self, dt):
+        price_forecast = self.market_prices.forecast(dt)
+        sorted_price_tseries = price_forecast.sort_values(by='price')
+        number_dispatch_pairs = int(self.number_tranches / 2)
+        charge_times = sorted_price_tseries.iloc[:number_dispatch_pairs, :].index
+        discharge_times = sorted_price_tseries.iloc[-number_dispatch_pairs:, :].index
+        charge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in charge_times])
+        discharge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in discharge_times])
+        self.dispatch_schedule.charge_schedule.add_periods(charge_periods)
+        self.dispatch_schedule.discharge_schedule.add_periods(discharge_periods)
+
+    def update_setpoint(
+            self,
+            dt: datetime
+    ):
+        if self.setpoint.schedule.universal.event_due(dt):
+            self.set_dispatch_schedule(dt)
+        timesetep_hours = self.meter.sample_rate / timedelta(hours=1)
+        setpoint_proposal = SetPointProposal(
+            charge=self.equipment.nominal_charge_capacity * timesetep_hours + self.demand_at_t(dt),
+            discharge=self.equipment.nominal_discharge_capacity * timesetep_hours - self.demand_at_t(dt)
+        )
+        self.setpoint.set(setpoint_proposal)

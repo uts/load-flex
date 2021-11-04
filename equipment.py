@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from datetime import timedelta
+
 import pandas as pd
 import numpy as np
 from typing import Type, List, Union, Tuple
@@ -72,7 +74,7 @@ class Equipment(ABC):
         return {x: getattr(self, x) for x in self.report_on}
 
     @abstractmethod
-    def dispatch_request(self, energy) -> float:
+    def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> float:
         pass
 
     @abstractmethod
@@ -97,7 +99,7 @@ class Storage(Equipment):
         return self.storage_capacity * (1 - self.state_of_charge)
 
     @abstractmethod
-    def dispatch_request(self, proposal) -> Dispatch:
+    def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> Dispatch:
         pass
 
     @abstractmethod

@@ -41,7 +41,7 @@ class PeakShave(SetPointOptimiser):
             exposed_sub = np.clip(sorted_df[sub_col].values, 0.0, exposed_gross)
             exposed_sub_area = sum(exposed_sub)
             if exposed_sub_area >= area:
-                return sorted_df[gross_col].iloc[i + 1]
+                return sorted_df[gross_col].iloc[i]
         return 0.0
 
     @staticmethod

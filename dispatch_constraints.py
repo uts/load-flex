@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Union, Tuple, List
-
+import  pandas as pd
 from ts_tariffs.tariffs import TOUCharge, DemandCharge
 
 from equipment import Dispatch
@@ -35,6 +35,8 @@ class DispatchSchedule:
     """
     charge_schedule: PeriodSchedule
     discharge_schedule: PeriodSchedule
+    charge_constraints: pd.Series = None
+    discharge_constraints: pd.Series = None
     allow_non_scheduled_dispatch: bool = False
 
     def charge(self, dt: datetime):
@@ -50,7 +52,7 @@ class DispatchSchedule:
         """ Identifies appropriate setpoint to use according to
         given datetime and the schedule
         """
-        which = 'charge' if self.charge(dt) else 'universal'
+        which = 'charge' if self.charge(dt) else 'None'
         which = 'discharge'if self.discharge(dt) else which
         which = 'universal' if self.both(dt) else which
         return which
@@ -141,12 +143,13 @@ class SetPoint(ABC):
         """ Identify which setpoint to use and find difference against
         demand
         """
-        setpoints = {
+        diffs = {
             'universal': demand_scenario.demand - self.universal_setpoint,
             'charge': min(0.0, demand_scenario.demand - self.charge_setpoint),
             'discharge': max(0.0, demand_scenario.demand -self.discharge_setpoint),
+            'None': 0.0
         }
-        return setpoints[schedule.which_setpoint(demand_scenario.dt)]
+        return diffs[schedule.which_setpoint(demand_scenario.dt)]
 
     @abstractmethod
     def set(
