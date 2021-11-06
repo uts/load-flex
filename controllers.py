@@ -14,7 +14,7 @@ from dispatch_constraints import (
     SetPointProposal,
     SetPoint,
     PeakShaveSetPoint,
-    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint, SetPointSchedule,
+    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint, SetPointSchedule, ThermalPeakShaveSetPoint,
 )
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
@@ -47,7 +47,7 @@ class StorageController(ABC):
             self,
             dt: datetime,
     ):
-        """
+        """ Update setpoints for gross curve load shifting
         """
         pass
 
@@ -78,14 +78,18 @@ class StorageController(ABC):
                 demand_scenario,
                 proposal,
             )
-
         return proposal
 
     def dispatch(self):
         for dt, demand in self.meter.tseries.iterrows():
             self.update_setpoint(dt)
             dispatch_proposal = self.dispatch_proposal(
-                    DemandScenario(demand[self.dispatch_on], dt, self.setpoint)
+                    DemandScenario(
+                        demand[self.dispatch_on],
+                        dt,
+                        self.setpoint,
+                        self.meter.tseries['balance_energy'].loc[dt]
+                    )
                 )
             dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
             self.dispatch_schedule.validate_dispatch(dispatch, dt)
@@ -192,7 +196,7 @@ class TouPeakShaveComboBatteryController(TouBatteryController):
 
 @dataclass
 class ThermalStoragePeakShaveController(StorageController):
-    setpoint: PeakShaveSetPoint
+    setpoint: ThermalPeakShaveSetPoint
     equipment: ThermalStorage
     meter: ThermalLoadFlexMeter
 
@@ -202,31 +206,32 @@ class ThermalStoragePeakShaveController(StorageController):
         self.meter.thermal_tseries['gross_mixed_electrical_and_thermal'] =\
             self.meter.thermal_tseries['subload_energy']\
             + self.meter.tseries['balance_energy']
+        self.meter.tseries['gross_mixed_electrical_and_thermal'] = self.meter.thermal_tseries['gross_mixed_electrical_and_thermal']
+        self.meter.tseries['thermal_subload_energy'] = self.meter.thermal_tseries['subload_energy']
 
     def propose_setpoint(self, dt: datetime):
         gross_col = 'gross_mixed_electrical_and_thermal'
-        sub_col = 'thermal_subload_energy'
-        calc_forecast = self.forecasters.universal.look_ahead(
-            self.meter.tseries,
-            dt
-        ).copy()
+        sub_col = 'subload_energy'
+        balance_col = 'balance_energy'
         thermal_forecast = self.forecasters.universal.look_ahead(
             self.meter.thermal_tseries,
             dt
         ).copy()
-        calc_forecast[gross_col] \
-            = thermal_forecast[gross_col]
-        calc_forecast[sub_col] = thermal_forecast['subload_energy']
-        calc_forecast.sort_values('demand_energy', inplace=True)
-        calc_forecast.reset_index(inplace=True, drop=True)
 
-        limiting_setpoint_idx = calc_forecast['balance_energy'].idxmax()
+        elec_demand = self.forecasters.universal.look_ahead(
+            self.meter.tseries,
+            dt
+        )
+        thermal_forecast['demand_energy'] = elec_demand['demand_energy']
+        thermal_forecast.sort_values('demand_energy', inplace=True)
+        thermal_forecast.reset_index(inplace=True, drop=True)
+
         proposal = PeakShave.sub_load_peak_shave_limit(
-            calc_forecast,
-            limiting_setpoint_idx,
+            thermal_forecast,
             self.equipment.available_energy,
             gross_col,
-            sub_col
+            sub_col,
+            balance_col,
         )
         return proposal
 
@@ -234,9 +239,10 @@ class ThermalStoragePeakShaveController(StorageController):
             self,
             dt: datetime
     ):
-        proposal = SetPointProposal()
-        proposal.universal = self.propose_setpoint(dt)
-        self.setpoint.set(proposal, dt)
+        if self.setpoint.universal_due(dt):
+            proposal = SetPointProposal()
+            proposal.universal = self.propose_setpoint(dt)
+            self.setpoint.set(proposal, dt)
 
 
 @dataclass
@@ -251,7 +257,6 @@ class WholesalePriceTranchBatteryController(StorageController):
                              'requires that charge and discharge capacities are equal')
         self.calculate_tranches()
         # self.initialise_setpoint(self.meter.first_datetime())
-
 
     def calculate_tranches(self):
         """Tranches defined by how much energy can be dispatched in a single time step and how

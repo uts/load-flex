@@ -85,8 +85,9 @@ class ThermalStorage(Storage):
         # Apply efficiency on charge only
         delta_energy = \
             self.round_trip_efficiency * dispatch.charge \
-            + dispatch.discharge
-        self.state_of_charge += delta_energy / self.storage_capacity
+            - dispatch.discharge
+        delta_state_of_charge = delta_energy / self.storage_capacity
+        self.state_of_charge += delta_state_of_charge
 
     def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> Dispatch:
         # Todo: update when discharge model is written
@@ -94,13 +95,13 @@ class ThermalStorage(Storage):
         dispatch = Dispatch(
             charge=min(
                 proposal.charge,
-                self.nominal_discharge_capacity * time_step_hours,
-                self.available_energy
+                self.nominal_charge_capacity * time_step_hours,
+                self.available_storage
             ),
             discharge=min(
                 proposal.discharge,
-                self.available_storage,
-                self.nominal_charge_capacity
+                self.nominal_discharge_capacity * time_step_hours,
+                self.available_energy,
             )
         )
         self.update_state(dispatch)

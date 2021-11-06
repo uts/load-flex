@@ -30,19 +30,22 @@ class PeakShave(SetPointOptimiser):
     @staticmethod
     def sub_load_peak_shave_limit(
             sorted_df: pd.DataFrame,
-            max_idx: int,
             area: float,
             gross_col: str,
             sub_col: str,
+            balance_col: str,
     ) -> float:
-        for i, row in sorted_df.iloc[:max_idx:-1].iterrows():
-            exposed_gross = sorted_df[gross_col].values - row[gross_col]
+        for i, row in sorted_df.iloc[::-1].iterrows():
+            trial_threshold = row[gross_col]
+            exposed_gross = sorted_df[gross_col].values - trial_threshold
             exposed_gross = np.where(exposed_gross < 0.0, 0.0, exposed_gross)
-            exposed_sub = np.clip(sorted_df[sub_col].values, 0.0, exposed_gross)
+            exposed_balance = sorted_df[balance_col].values - trial_threshold
+            exposed_balance = np.where(exposed_balance < 0.0, 0.0, exposed_balance)
+            exposed_sub = exposed_gross - exposed_balance
             exposed_sub_area = sum(exposed_sub)
             if exposed_sub_area >= area:
-                return sorted_df[gross_col].iloc[i]
-        return 0.0
+                return trial_threshold
+        return max(0.0, min(sorted_df[sub_col]))
 
     @staticmethod
     def peak_shave(demand_arr: np.ndarray, area):

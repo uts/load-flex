@@ -16,6 +16,7 @@ class DemandScenario:
     demand: float
     dt: datetime
     setpoint: SetPoint
+    balance_energy: float
 
 
 @dataclass
@@ -86,6 +87,8 @@ class SetPointSchedule:
             self.charge = EventSchedule([])
         if not self.discharge:
             self.discharge = EventSchedule([])
+        if not self.pause_setpoints:
+            self.pause_setpoints = PeriodSchedule([])
 
     def pause(self, dt: datetime) -> bool:
         return self.pause_setpoints.period_active(dt)
@@ -146,7 +149,7 @@ class SetPoint(ABC):
         diffs = {
             'universal': demand_scenario.demand - self.universal_setpoint,
             'charge': min(0.0, demand_scenario.demand - self.charge_setpoint),
-            'discharge': max(0.0, demand_scenario.demand -self.discharge_setpoint),
+            'discharge': max(0.0, demand_scenario.demand - self.discharge_setpoint),
             'None': 0.0
         }
         return diffs[schedule.which_setpoint(demand_scenario.dt)]
@@ -158,6 +161,34 @@ class SetPoint(ABC):
             dt: datetime = None
     ):
         pass
+
+
+@dataclass
+class SubLoadSetPoint(SetPoint):
+    # def raw_dispatch_proposal(
+    #         self,
+    #         demand_scenario: DemandScenario,
+    #         schedule: DispatchSchedule
+    # ) -> float:
+    #     """ Identify which setpoint to use and find difference against
+    #     demand
+    #     """
+    #     diffs = {
+    #         'universal': demand_scenario.demand - max(0.0, self.universal_setpoint - demand_scenario.balance_energy),
+    #         'charge': min(0.0, demand_scenario.demand - max(0.0, self.charge_setpoint - demand_scenario.balance_energy)),
+    #         'discharge': max(0.0, demand_scenario.demand - max(0.0, self.discharge_setpoint - demand_scenario.balance_energy)),
+    #         'None': 0.0
+    #     }
+    #     return diffs[schedule.which_setpoint(demand_scenario.dt)]
+
+    @abstractmethod
+    def set(
+            self,
+            setpoint_proposal: SetPointProposal,
+            dt: datetime = None
+    ):
+        pass
+
 
 
 @dataclass
@@ -233,6 +264,20 @@ class GenericSetPoint(SetPoint):
             self.discharge_setpoint = setpoint_proposal.discharge
         if setpoint_proposal.universal:
             self.universal_setpoint = setpoint_proposal.universal
+
+
+
+@dataclass
+class ThermalPeakShaveSetPoint(SubLoadSetPoint):
+
+    def set(
+            self,
+            setpoint_proposal: SetPointProposal,
+            dt: datetime = None
+    ):
+        """ Unconstrained peak shaving
+        """
+        self.universal_setpoint = setpoint_proposal.universal
 
 
 @dataclass

@@ -22,7 +22,7 @@ POWER_METER_COLS = (
 
 THERMAL_METER_COLS = (
     *POWER_METER_COLS,
-    'subload_energy'
+    'subload_energy',
 )
 
 
@@ -104,6 +104,10 @@ class PowerFlexMeter(DispatchFlexMeter):
 
     def __post_init__(self):
         Validator.data_cols(self.tseries, POWER_METER_COLS)
+        if 'subload_energy' not in self.tseries.columns:
+            self.tseries['subload_energy'] = 0.0
+        self.tseries['balance_energy'] = \
+            self.tseries['demand_energy'] - self.tseries['subload_energy']
         self.dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
 
@@ -189,6 +193,7 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.thermal_tseries['flex_cop'] = self.thermal_properties.flex_cop
         self.thermal_tseries['subload_energy'] =\
             self.tseries['subload_energy'] * self.thermal_tseries['load_cop']
+        self.thermal_tseries['balance_energy'] = self.tseries['balance_energy']
 
     def update_dispatch(
             self,
@@ -229,6 +234,10 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.flexed_tseries['power_factor'] = self.tseries['power_factor']
         self.flexed_tseries['subload_energy'] =\
             self.tseries['subload_energy'] - self.electrical_dispatch_tseries['energy_net']
+        self.flexed_tseries['gross_mixed_electrical_and_thermal'] = \
+            self.tseries['gross_mixed_electrical_and_thermal'] + \
+            + self.thermal_dispatch_tseries['charge'] \
+            - self.thermal_dispatch_tseries['discharge']
 
         if return_new_meter:
             column_map = {
@@ -238,6 +247,12 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
                 }
                 for column in THERMAL_METER_COLS
             }
+            column_map.update({
+                'gross_mixed_electrical_and_thermal': {
+                    'ts': 'gross_mixed_electrical_and_thermal',
+                    'units': 'mixed'
+                }
+            })
             return ThermalLoadFlexMeter.from_dataframe(
                 name,
                 self.flexed_tseries,

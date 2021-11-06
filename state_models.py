@@ -22,4 +22,4 @@ class StateBasedCapacity(StateBasedProperty):
     @staticmethod
     def calculate(state: Equipment) -> float:
         # Todo: insert model here
-        return 2000
+        return 330
