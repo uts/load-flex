@@ -90,17 +90,16 @@ class ThermalStorage(Storage):
         self.state_of_charge += delta_state_of_charge
 
     def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> Dispatch:
-        # Todo: update when discharge model is written
         time_step_hours = sample_rate / timedelta(hours=1)
         dispatch = Dispatch(
             charge=min(
                 proposal.charge,
-                self.nominal_charge_capacity * time_step_hours,
+                self.charge_capacity * time_step_hours,
                 self.available_storage
             ),
             discharge=min(
                 proposal.discharge,
-                self.nominal_discharge_capacity * time_step_hours,
+                self.discharge_capacity * time_step_hours,
                 self.available_energy,
             )
         )

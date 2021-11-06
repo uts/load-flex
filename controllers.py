@@ -201,13 +201,7 @@ class ThermalStoragePeakShaveController(StorageController):
     meter: ThermalLoadFlexMeter
 
     def __post_init__(self):
-
-        # Add cols for setpoint calcs
-        self.meter.thermal_tseries['gross_mixed_electrical_and_thermal'] =\
-            self.meter.thermal_tseries['subload_energy']\
-            + self.meter.tseries['balance_energy']
-        self.meter.tseries['gross_mixed_electrical_and_thermal'] = self.meter.thermal_tseries['gross_mixed_electrical_and_thermal']
-        self.meter.tseries['thermal_subload_energy'] = self.meter.thermal_tseries['subload_energy']
+        pass
 
     def propose_setpoint(self, dt: datetime):
         gross_col = 'gross_mixed_electrical_and_thermal'
@@ -217,17 +211,15 @@ class ThermalStoragePeakShaveController(StorageController):
             self.meter.thermal_tseries,
             dt
         ).copy()
-
         elec_demand = self.forecasters.universal.look_ahead(
             self.meter.tseries,
             dt
         )
-        thermal_forecast['demand_energy'] = elec_demand['demand_energy']
-        thermal_forecast.sort_values('demand_energy', inplace=True)
+        thermal_forecast['balance_energy'] = elec_demand['balance_energy']
+        sort_order = np.argsort(elec_demand['demand_energy'])
         thermal_forecast.reset_index(inplace=True, drop=True)
-
         proposal = PeakShave.sub_load_peak_shave_limit(
-            thermal_forecast,
+            thermal_forecast.iloc[sort_order],
             self.equipment.available_energy,
             gross_col,
             sub_col,

@@ -183,6 +183,8 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.tseries['balance_energy'] = \
             self.tseries['demand_energy'] - self.tseries['subload_energy']
         self.create_thermal_tseries()
+        self.tseries['gross_mixed_electrical_and_thermal'] = \
+            self.thermal_tseries['gross_mixed_electrical_and_thermal']
         self.thermal_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.electrical_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
@@ -193,7 +195,8 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.thermal_tseries['flex_cop'] = self.thermal_properties.flex_cop
         self.thermal_tseries['subload_energy'] =\
             self.tseries['subload_energy'] * self.thermal_tseries['load_cop']
-        self.thermal_tseries['balance_energy'] = self.tseries['balance_energy']
+        self.thermal_tseries['gross_mixed_electrical_and_thermal'] = \
+            self.thermal_tseries['subload_energy'] + self.tseries['balance_energy']
 
     def update_dispatch(
             self,
@@ -235,7 +238,7 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.flexed_tseries['subload_energy'] =\
             self.tseries['subload_energy'] - self.electrical_dispatch_tseries['energy_net']
         self.flexed_tseries['gross_mixed_electrical_and_thermal'] = \
-            self.tseries['gross_mixed_electrical_and_thermal'] + \
+            self.thermal_tseries['gross_mixed_electrical_and_thermal'] + \
             + self.thermal_dispatch_tseries['charge'] \
             - self.thermal_dispatch_tseries['discharge']
 
