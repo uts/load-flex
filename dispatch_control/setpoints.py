@@ -1,12 +1,36 @@
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Union, Tuple
+import pandas as pd
 
 from dispatch_control.dispatch_schedulers import AllowableDispatchSchedule
 from dispatch_control.parameters import ParamSetterSchedule
 from equipment import Dispatch
+from time_tools.forecasters import PerfectForcaster
 from time_tools.schedulers import SpecificEvents
+
+
+@dataclass
+class SetpointForecasters:
+    """ Specification of different forecasting
+    params for charge, discharge and universal
+    setpoint calcs
+    """
+    charge: PerfectForcaster
+    discharge: PerfectForcaster
+    universal: PerfectForcaster
+
+    @classmethod
+    def from_hours(cls, charge, discharge, universal):
+        """ Instantiate SetpointForecasters object given
+        forecast windows for charge, discharge and universal
+        setpoint in terms of hours
+        """
+        return cls(
+            PerfectForcaster(timedelta(hours=charge)),
+            PerfectForcaster(timedelta(hours=discharge)),
+            PerfectForcaster(timedelta(hours=universal))
+        )
 
 
 @dataclass
@@ -26,6 +50,7 @@ class SetPointProposal:
 @dataclass
 class SetPoints:
     setter_schedule: ParamSetterSchedule
+    forecasters: SetpointForecasters
     charge_setpoint: float = field(init=False, default=0.0)
     discharge_setpoint: float = field(init=False, default=0.0)
     universal_setpoint: float = field(init=False, default=0.0)
@@ -68,28 +93,39 @@ class SetPoints:
         if universal_params_dt:
             self.setter_schedule.universal_params.add_event(SpecificEvents(tuple([universal_params_dt])))
 
+    def universal_forecast(
+            self,
+            tseries: pd.DataFrame,
+            start_dt: datetime
+    ):
+        return self.forecasters.universal.look_ahead(
+            tseries, start_dt
+        )
+
+    def charge_forecast(
+            self,
+            tseries: pd.DataFrame,
+            start_dt: datetime
+    ):
+        return self.forecasters.charge.look_ahead(
+            tseries, start_dt
+        )
+
+    def discharge_forecast(
+            self,
+            tseries: pd.DataFrame,
+            start_dt: datetime
+    ):
+        return self.forecasters.discharge.look_ahead(
+            tseries, start_dt
+        )
+
+
     def set_setpoints(
             self,
             setpoint_proposal: SetPointProposal,
             dt: datetime = None
     ):
-        if setpoint_proposal.charge:
-            self.charge_setpoint = setpoint_proposal.charge
-        if setpoint_proposal.discharge:
-            self.discharge_setpoint = setpoint_proposal.discharge
-        if setpoint_proposal.universal:
-            self.universal_setpoint = setpoint_proposal.universal
-
-
-@dataclass
-class GenericSetPoints(SetPoints):
-    def set_setpoints(
-            self,
-            setpoint_proposal: SetPointProposal,
-            dt: datetime = None
-    ):
-        """ Accepts whatever setpoints are proposed
-        """
         if setpoint_proposal.charge:
             self.charge_setpoint = setpoint_proposal.charge
         if setpoint_proposal.discharge:
@@ -124,4 +160,3 @@ class CappedSetPoints(SetPoints):
         if self.discharge_cap:
             if dt.hour in self.universal_cap.hours:
                 self.universal_setpoint = self.universal_cap.cap
-

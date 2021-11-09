@@ -8,36 +8,21 @@ import numpy as np
 
 from dispatch_control.controllers import ParamController
 from dispatch_control.dispatch_schedulers import (
-    AllowableDispatchSchedule, DispatchSchedule,
-)
+    AllowableDispatchSchedule, )
 from dispatch_control.constraints import DispatchConstraint
 from dispatch_control.setpoints import SetPointProposal, DemandScenario
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
-from time_tools.schedulers import SpecificEvents, DateRangePeriod
-from time_tools.forecasters import Forecaster
+from time_tools.schedulers import DateRangePeriod
 from optimisers import PeakShave, TOUShiftingCalculator
 from equipment import Storage, Dispatch
-from validators import Validator
 from wholesale_prices import MarketPrices
-
-
-@dataclass
-class Forecasters:
-    """ Specification of different forecasting
-    params for charge, discharge and universal
-    setpoint calcs
-    """
-    charge: Forecaster
-    discharge: Forecaster
-    universal: Forecaster
 
 
 @dataclass
 class StorageDispatcher(ABC):
     name: str
     equipment: Storage
-    forecasters: Forecasters
     allowable_dispatch_schedule: AllowableDispatchSchedule
     other_dispatch_constraints: List[DispatchConstraint]
     meter: DispatchFlexMeter
@@ -151,7 +136,7 @@ class PeakShaveBatteryDispatcher(StorageDispatcher):
         )
 
     def propose_setpoint(self, dt: datetime):
-        forecast = self.forecasters.universal.look_ahead(
+        forecast = self.controller.setpoints.universal_forecast(
             self.meter.tseries,
             dt
         )
@@ -211,7 +196,7 @@ class TouBatteryDispatcher(StorageDispatcher):
         )
 
     def propose_charge_setpoint(self, dt: datetime):
-        forecast = self.forecasters.charge.look_ahead(
+        forecast = self.controller.setpoints.charge_forecast(
             self.meter.tseries,
             dt
         )
@@ -223,7 +208,7 @@ class TouBatteryDispatcher(StorageDispatcher):
         )
 
     def propose_discharge_setpoint(self, dt: datetime):
-        forecast = self.forecasters.discharge.look_ahead(
+        forecast = self.controller.setpoints.discharge_forecast(
             self.meter.tseries,
             dt
         )
@@ -286,11 +271,11 @@ class ThermalStoragePeakShaveDispatcher(StorageDispatcher):
         gross_col = 'gross_mixed_electrical_and_thermal'
         sub_col = 'subload_energy'
         balance_col = 'balance_energy'
-        thermal_forecast = self.forecasters.universal.look_ahead(
+        thermal_forecast = self.controller.setpoints.universal_forecast(
             self.meter.thermal_tseries,
             dt
         ).copy()
-        elec_demand = self.forecasters.universal.look_ahead(
+        elec_demand = self.controller.setpoints.universal_forecast(
             self.meter.tseries,
             dt
         )
