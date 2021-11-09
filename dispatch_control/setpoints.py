@@ -3,8 +3,8 @@ from datetime import datetime, timedelta
 from typing import Union, Tuple
 import pandas as pd
 
-from dispatch_control.dispatch_schedulers import AllowableDispatchSchedule
-from dispatch_control.parameters import ParamSetterSchedule
+from dispatch_control.dispatch_schedulers import DispatchConstraintSchedule
+from dispatch_control.parameters import ParamSetterSchedules
 from equipment import Dispatch
 from time_tools.forecasters import PerfectForcaster
 from time_tools.schedulers import SpecificEvents
@@ -49,7 +49,7 @@ class SetPointProposal:
 
 @dataclass
 class SetPoints:
-    setter_schedule: ParamSetterSchedule
+    setter_schedule: ParamSetterSchedules
     forecasters: SetpointForecasters
     charge_setpoint: float = field(init=False, default=0.0)
     discharge_setpoint: float = field(init=False, default=0.0)
@@ -67,7 +67,7 @@ class SetPoints:
     def dispatch_proposal(
             self,
             demand_scenario: DemandScenario,
-            schedule: AllowableDispatchSchedule
+            schedule: DispatchConstraintSchedule
     ) -> Dispatch:
         """ Identify which setpoint is relevant for dt and propose a dispatch
         """

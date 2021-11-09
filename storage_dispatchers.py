@@ -8,8 +8,8 @@ import numpy as np
 
 from dispatch_control.controllers import ParamController
 from dispatch_control.dispatch_schedulers import (
-    AllowableDispatchSchedule, )
-from dispatch_control.constraints import DispatchConstraint
+    DispatchConstraintSchedule, )
+from dispatch_control.constraints import DispatchConstraint, DispatchConstraints
 from dispatch_control.setpoints import SetPointProposal, DemandScenario
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
@@ -23,8 +23,8 @@ from wholesale_prices import MarketPrices
 class StorageDispatcher(ABC):
     name: str
     equipment: Storage
-    allowable_dispatch_schedule: AllowableDispatchSchedule
-    other_dispatch_constraints: List[DispatchConstraint]
+    dispatch_constraint_schedule: DispatchConstraintSchedule
+    special_constraints: DispatchConstraints
     meter: DispatchFlexMeter
     controller: ParamController
     dispatch_on: str
@@ -70,19 +70,14 @@ class StorageDispatcher(ABC):
     def setpoint_dispatch_proposal(self, demand_scenario: DemandScenario) -> Dispatch:
         return self.controller.setpoints.dispatch_proposal(
             demand_scenario,
-            self.allowable_dispatch_schedule
+            self.dispatch_constraint_schedule
         )
 
     def scheduled_dispatch_proposal(self, dt: datetime) -> Dispatch:
         return self.controller.dispatch_schedule.dispatch_proposal(dt)
 
-    def apply_constraints(self, proposal: Dispatch, demand_scenario: DemandScenario) -> Dispatch:
-        for condition in self.other_dispatch_constraints:
-            proposal = condition.constrain_dispatch(
-                demand_scenario,
-                proposal,
-            )
-        return proposal
+    def apply_special_constraints(self, proposal: Dispatch) -> Dispatch:
+        return self.special_constraints.constrain(proposal)
 
     def update_historical_net_demand(self, net_demand: float):
         self.historical_peak_demand = max(net_demand, self.historical_peak_demand)
@@ -101,8 +96,10 @@ class StorageDispatcher(ABC):
                 )
                 dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
 
+            dispatch_proposal = self.apply_special_constraints(dispatch_proposal)
+
             dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
-            self.allowable_dispatch_schedule.validate_dispatch(dispatch, dt)
+            self.dispatch_constraint_schedule.validate_dispatch(dispatch, dt)
             reportables = {
                 'charge_setpoint': self.controller.setpoints.charge_setpoint,
                 'discharge_setpoint': self.controller.setpoints.discharge_setpoint,

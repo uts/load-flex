@@ -78,7 +78,7 @@ class SpecificEvents(EventOccurrence):
 
 
 @dataclass
-class SpecificHourEvents(EventOccurrence, DailyHours):
+class SpecificHourDailyEvents(EventOccurrence, DailyHours):
     def is_due(self, dt: datetime):
         due = False
         if self.relevant_day(dt):
@@ -104,6 +104,37 @@ class EventSchedule:
             for occurrence in self.event_occurrences:
                 due = True if occurrence.is_due(dt) else due
         return due
+
+    @classmethod
+    def from_daily_hours(
+        cls,
+        hours: Tuple[int],
+        monday: bool = False,
+        tuesday: bool = False,
+        wednesday: bool = False,
+        thursday: bool = False,
+        friday: bool = False,
+        saturday: bool = False,
+        sunday: bool = False,
+        all_days: bool = False,
+        weekends: bool = False,
+        weekdays: bool = False,
+    ):
+        return cls([
+            SpecificHourDailyEvents(
+                hours,
+                monday,
+                tuesday,
+                wednesday,
+                thursday,
+                friday,
+                saturday,
+                sunday,
+                all_days,
+                weekends,
+                weekdays,
+            )
+        ])
 
 
 @dataclass

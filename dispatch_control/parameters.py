@@ -6,7 +6,7 @@ from time_tools.schedulers import EventSchedule, PeriodSchedule
 
 
 @dataclass
-class ParamSetterSchedule:
+class ParamSetterSchedules:
     """
     """
     charge_params: EventSchedule = None

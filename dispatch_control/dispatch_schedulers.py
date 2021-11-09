@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List
 
-from dispatch_control.parameters import ParamSetterSchedule
+from dispatch_control.parameters import ParamSetterSchedules
 from equipment import Dispatch
 from time_tools.schedulers import PeriodSchedule, Period
 
@@ -13,7 +13,7 @@ from time_tools.schedulers import PeriodSchedule, Period
 class DispatchSchedule:
     """ Schedule for charging and discharging at specific rates
     """
-    setter_schedule: ParamSetterSchedule
+    setter_schedule: ParamSetterSchedules
     charge_schedule: PeriodSchedule
     discharge_schedule: PeriodSchedule
     charge_energy: float = None
@@ -47,9 +47,17 @@ class DispatchSchedule:
         if discharge_periods:
             self.discharge_schedule.add_periods(discharge_periods)
 
+    @classmethod
+    def empty_schedule(cls):
+        return cls(
+            ParamSetterSchedules(),
+            PeriodSchedule(),
+            PeriodSchedule(),
+        )
+
 
 @dataclass
-class AllowableDispatchSchedule:
+class DispatchConstraintSchedule:
     """ Constrains when and how much dispatch is allowed at
     specific times
     """
