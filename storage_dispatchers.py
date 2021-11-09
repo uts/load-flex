@@ -88,29 +88,24 @@ class StorageDispatcher(ABC):
             self.optimise_dispatch_params(dt)
             # Only invoke setpoints if no scheduled dispatch
             dispatch_proposal = self.scheduled_dispatch_proposal(dt)
-            if dispatch_proposal.no_dispatch:
-                demand_scenario = DemandScenario(
-                    demand[self.dispatch_on],
-                    dt,
-                    self.meter.tseries['balance_energy'].loc[dt]
-                )
-                dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
+            if self.controller.setpoints:
+                if dispatch_proposal.no_dispatch:
+                    demand_scenario = DemandScenario(
+                        demand[self.dispatch_on],
+                        dt,
+                        self.meter.tseries['balance_energy'].loc[dt]
+                    )
+                    dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
 
             dispatch_proposal = self.apply_special_constraints(dispatch_proposal)
 
             dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
             self.dispatch_constraint_schedule.validate_dispatch(dispatch, dt)
-            reportables = {
-                'charge_setpoint': self.controller.setpoints.charge_setpoint,
-                'discharge_setpoint': self.controller.setpoints.discharge_setpoint,
-                'universal_setpoint': self.controller.setpoints.universal_setpoint,
-                **self.equipment.status()
-            }
             self.meter.update_dispatch(
                 dt,
                 dispatch,
                 self.dispatch_on,
-                reportables,
+                {**self.controller.reportables, **self.equipment.status()}
             )
             self.update_historical_net_demand(
                 demand[self.dispatch_on] - dispatch.net_value

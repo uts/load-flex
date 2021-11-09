@@ -120,7 +120,6 @@ class SetPoints:
             tseries, start_dt
         )
 
-
     def set_setpoints(
             self,
             setpoint_proposal: SetPointProposal,

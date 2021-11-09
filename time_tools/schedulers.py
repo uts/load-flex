@@ -108,7 +108,7 @@ class EventSchedule:
     @classmethod
     def from_daily_hours(
         cls,
-        hours: Tuple[int],
+        hours: Tuple[int, ],
         monday: bool = False,
         tuesday: bool = False,
         wednesday: bool = False,
@@ -194,3 +194,34 @@ class PeriodSchedule:
 
     def add_periods(self, new_periods: List[Period]):
         self.periods.extend(new_periods)
+
+    @classmethod
+    def from_daily_hours(
+            cls,
+            hours: Tuple[int],
+            monday: bool = False,
+            tuesday: bool = False,
+            wednesday: bool = False,
+            thursday: bool = False,
+            friday: bool = False,
+            saturday: bool = False,
+            sunday: bool = False,
+            all_days: bool = False,
+            weekends: bool = False,
+            weekdays: bool = False,
+    ):
+        return cls([
+            DailyPeriod(
+                hours,
+                monday,
+                tuesday,
+                wednesday,
+                thursday,
+                friday,
+                saturday,
+                sunday,
+                all_days,
+                weekends,
+                weekdays,
+            )
+        ])
