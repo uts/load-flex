@@ -3,11 +3,11 @@ from datetime import timedelta
 
 import pandas as pd
 import numpy as np
-from typing import Type, List, Union, Tuple
+from typing import Type, List, Union
 from numbers import Number
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from time_series_utils import Forecaster
+from time_tools.forecasters import Forecaster
 
 
 @dataclass
@@ -28,6 +28,10 @@ class Dispatch:
         discharge and negative indicates charge
         """
         return self.discharge - self.charge
+
+    @property
+    def no_dispatch(self):
+        return self.net_value == 0.0
 
     @property
     def valid_dispatch(self) -> bool:

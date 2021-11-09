@@ -5,45 +5,61 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import List
 import numpy as np
-from ts_tariffs.sites import MeterData
-from ts_tariffs.tariffs import DemandCharge, TOUCharge
 
-from dispatch_constraints import (
-    DispatchConstraint,
-    DispatchSchedule,
-    SetPointProposal,
-    SetPoint,
-    PeakShaveSetPoint,
-    DemandScenario, GenericSetPoint, TouPeakShaveComboSetPoint, SetPointSchedule, ThermalPeakShaveSetPoint,
+from dispatch_control.controllers import ParamController
+from dispatch_control.dispatch_schedulers import (
+    AllowableDispatchSchedule, DispatchSchedule,
 )
+from dispatch_control.constraints import DispatchConstraint
+from dispatch_control.setpoints import SetPointProposal, DemandScenario
 from metering import ThermalLoadFlexMeter, DispatchFlexMeter
 from storage import Battery, ThermalStorage
-from time_series_utils import Forecaster, SpecificEvents, EventSchedule, PeriodSchedule, DateRangePeriod
+from time_tools.schedulers import SpecificEvents, DateRangePeriod
+from time_tools.forecasters import Forecaster
 from optimisers import PeakShave, TOUShiftingCalculator
 from equipment import Storage, Dispatch
+from validators import Validator
 from wholesale_prices import MarketPrices
 
 
 @dataclass
 class Forecasters:
+    """ Specification of different forecasting
+    params for charge, discharge and universal
+    setpoint calcs
+    """
     charge: Forecaster
     discharge: Forecaster
     universal: Forecaster
 
 
 @dataclass
-class StorageController(ABC):
+class StorageDispatcher(ABC):
     name: str
     equipment: Storage
     forecasters: Forecasters
-    dispatch_schedule: DispatchSchedule
+    allowable_dispatch_schedule: AllowableDispatchSchedule
     other_dispatch_constraints: List[DispatchConstraint]
     meter: DispatchFlexMeter
-    setpoint: SetPoint
+    controller: ParamController
     dispatch_on: str
 
+    historical_peak_demand: float = field(init=False, default=0.0)
+    historical_min_demand: float = field(init=False, default=0.0)
+
+    def __post_init__(self):
+        self._parent_post_init()
+
+    def _parent_post_init(self):
+        """ Convenience method for preventing override of base class __post_init__
+
+        Where child classes overide the __post_init__ method, they should call this method
+        to ensure parent post init operations occur
+        """
+        pass
+
     @abstractmethod
-    def update_setpoint(
+    def optimise_dispatch_params(
             self,
             dt: datetime,
     ):
@@ -51,52 +67,61 @@ class StorageController(ABC):
         """
         pass
 
-    def initialise_setpoint(self, dt: datetime):
-        setpoint_schedule_event = SpecificEvents(tuple([dt]))
-        event_setters = {
-            'charge': self.setpoint.schedule.charge,
-            'discharge': self.setpoint.schedule.discharge,
-            'universal': self.setpoint.schedule.universal,
-        }
-        which_event = self.dispatch_schedule.which_setpoint(dt)
-        event_setters[which_event].add_event(
-            setpoint_schedule_event
+    def add_setpoint_set_event(
+            self,
+            charge_params_dt: datetime = None,
+            discharge_params_dt: datetime = None,
+            universal_params_dt: datetime = None,
+    ):
+        self.controller.setpoints.add_setter_events(
+            charge_params_dt,
+            discharge_params_dt,
+            universal_params_dt,
         )
-        self.update_setpoint(dt)
 
     def demand_at_t(self, dt: datetime):
         return self.meter.tseries.loc[dt][self.dispatch_on]
 
-    def dispatch_proposal(self, demand_scenario: DemandScenario) -> Dispatch:
-        raw_dispatch_proposal = self.setpoint.raw_dispatch_proposal(
+    def setpoint_dispatch_proposal(self, demand_scenario: DemandScenario) -> Dispatch:
+        return self.controller.setpoints.dispatch_proposal(
             demand_scenario,
-            self.dispatch_schedule
+            self.allowable_dispatch_schedule
         )
-        proposal = Dispatch.from_raw_float(raw_dispatch_proposal)
+
+    def scheduled_dispatch_proposal(self, dt: datetime) -> Dispatch:
+        return self.controller.dispatch_schedule.dispatch_proposal(dt)
+
+    def apply_constraints(self, proposal: Dispatch, demand_scenario: DemandScenario) -> Dispatch:
         for condition in self.other_dispatch_constraints:
-            proposal = condition.limit_dispatch(
+            proposal = condition.constrain_dispatch(
                 demand_scenario,
                 proposal,
             )
         return proposal
 
+    def update_historical_net_demand(self, net_demand: float):
+        self.historical_peak_demand = max(net_demand, self.historical_peak_demand)
+        self.historical_min_demand = min(net_demand, self.historical_peak_demand)
+
     def dispatch(self):
         for dt, demand in self.meter.tseries.iterrows():
-            self.update_setpoint(dt)
-            dispatch_proposal = self.dispatch_proposal(
-                    DemandScenario(
-                        demand[self.dispatch_on],
-                        dt,
-                        self.setpoint,
-                        self.meter.tseries['balance_energy'].loc[dt]
-                    )
+            self.optimise_dispatch_params(dt)
+            # Only invoke setpoints if no scheduled dispatch
+            dispatch_proposal = self.scheduled_dispatch_proposal(dt)
+            if dispatch_proposal.no_dispatch:
+                demand_scenario = DemandScenario(
+                    demand[self.dispatch_on],
+                    dt,
+                    self.meter.tseries['balance_energy'].loc[dt]
                 )
+                dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
+
             dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
-            self.dispatch_schedule.validate_dispatch(dispatch, dt)
+            self.allowable_dispatch_schedule.validate_dispatch(dispatch, dt)
             reportables = {
-                'charge_setpoint': self.setpoint.charge_setpoint,
-                'discharge_setpoint': self.setpoint.discharge_setpoint,
-                'universal_setpoint': self.setpoint.universal_setpoint,
+                'charge_setpoint': self.controller.setpoints.charge_setpoint,
+                'discharge_setpoint': self.controller.setpoints.discharge_setpoint,
+                'universal_setpoint': self.controller.setpoints.universal_setpoint,
                 **self.equipment.status()
             }
             self.meter.update_dispatch(
@@ -105,22 +130,25 @@ class StorageController(ABC):
                 self.dispatch_on,
                 reportables,
             )
-            self.setpoint.update_historical_net_demand(
+            self.update_historical_net_demand(
                 demand[self.dispatch_on] - dispatch.net_value
             )
 
 
 @dataclass
-class PeakShaveBatteryController(StorageController):
-    setpoint: PeakShaveSetPoint
+class PeakShaveBatteryDispatcher(StorageDispatcher):
     equipment: Battery
 
     def __post_init__(self):
-        if not self.setpoint.schedule.universal.event_occurrences:
+        self._parent_post_init()
+        if not self.controller.setpoints.setter_schedule.universal_params.event_occurrences:
             raise TypeError('Universal setpoint schedule events missing: '
                             'Peak shave setpoint requires schedule'
                             ' with events in universal schedule')
-        self.initialise_setpoint(self.meter.first_datetime())
+        # Ensure setpoints set from start datetime
+        self.add_setpoint_set_event(
+            universal_params_dt=self.meter.first_datetime()
+        )
 
     def propose_setpoint(self, dt: datetime):
         forecast = self.forecasters.universal.look_ahead(
@@ -135,20 +163,52 @@ class PeakShaveBatteryController(StorageController):
         )
         return np.flip(sorted_arr)[index]
 
-    def update_setpoint(self, dt: datetime):
+    def optimise_dispatch_params(self, dt: datetime):
         proposal = SetPointProposal()
-        if self.setpoint.universal_due(dt):
+        if self.controller.setpoints.universal_due(dt):
             proposal.universal = self.propose_setpoint(dt)
-        self.setpoint.set(proposal, dt)
+        self.controller.setpoints.set_setpoints(proposal, dt)
 
 
 @dataclass
-class TouBatteryController(StorageController):
-    setpoint: GenericSetPoint
+class ConservativePeakShaveComboBatteryController(PeakShaveBatteryDispatcher):
+    """ Adjusts universal setpoint according to proposal and historical maximum.
+
+    This strategy reduces the depth of peak shaving attempted by limiting it
+    to be only as good as historical achievement. This is specifically advantageous
+    where demand tariffs are the primary concern and there is no advantage in peak shaving
+    below the period's peak demand. The advantage is gained by reducing the available
+    energy required to achieve the target peak - i.e. there is more likelihood of energy
+    being available
+    """
     equipment: Battery
 
     def __post_init__(self):
-        self.initialise_setpoint(self.meter.first_datetime())
+        self._parent_post_init()
+        self.add_setpoint_set_event(
+            universal_params_dt=self.meter.first_datetime()
+        )
+
+    def optimise_dispatch_params(self, dt: datetime):
+        proposal = SetPointProposal()
+        if self.controller.setpoints.universal_due(dt):
+            proposal.universal = max(
+                self.propose_setpoint(dt),
+                self.historical_peak_demand
+            )
+        self.controller.setpoints.set_setpoints(proposal, dt)
+
+
+@dataclass
+class TouBatteryDispatcher(StorageDispatcher):
+    equipment: Battery
+
+    def __post_init__(self):
+        self._parent_post_init()
+        self.add_setpoint_set_event(
+            charge_params_dt=self.meter.first_datetime(),
+            discharge_params_dt = self.meter.first_datetime()
+        )
 
     def propose_charge_setpoint(self, dt: datetime):
         forecast = self.forecasters.charge.look_ahead(
@@ -173,35 +233,54 @@ class TouBatteryController(StorageController):
             self.equipment.available_energy
         )
 
-    def update_setpoint(
+    def optimise_dispatch_params(
             self,
             dt: datetime,
     ):
         proposal = SetPointProposal()
-        if self.setpoint.charge_due(dt):
+        if self.controller.setpoints.charge_due(dt):
             proposal.charge = self.propose_charge_setpoint(dt)
-        if self.setpoint.discharge_due(dt):
+        if self.controller.setpoints.discharge_due(dt):
             proposal.discharge = self.propose_discharge_setpoint(dt)
-        self.setpoint.set(proposal, dt)
+        self.controller.setpoints.set_setpoints(proposal, dt)
 
 
 @dataclass
-class TouPeakShaveComboBatteryController(TouBatteryController):
-    setpoint: TouPeakShaveComboSetPoint
+class TouPeakShaveComboBatteryController(TouBatteryDispatcher):
     equipment: Battery
 
     def __post_init__(self):
-        self.initialise_setpoint(self.meter.first_datetime())
+        self._parent_post_init()
+        self.add_setpoint_set_event(
+            charge_params_dt=self.meter.first_datetime(),
+            discharge_params_dt = self.meter.first_datetime()
+        )
+
+    def optimise_dispatch_params(
+            self,
+            dt: datetime,
+    ):
+        proposal = SetPointProposal()
+        if self.controller.setpoints.charge_due(dt):
+            proposal.charge = min(
+                self.propose_charge_setpoint(dt),
+                self.historical_peak_demand
+            )
+        if self.controller.setpoints.discharge_due(dt):
+            proposal.discharge = self.propose_discharge_setpoint(dt)
+        self.controller.setpoints.set_setpoints(proposal, dt)
 
 
 @dataclass
-class ThermalStoragePeakShaveController(StorageController):
-    setpoint: ThermalPeakShaveSetPoint
+class ThermalStoragePeakShaveDispatcher(StorageDispatcher):
     equipment: ThermalStorage
     meter: ThermalLoadFlexMeter
 
     def __post_init__(self):
-        pass
+        self._parent_post_init()
+        self.add_setpoint_set_event(
+            universal_params_dt=self.meter.first_datetime()
+        )
 
     def propose_setpoint(self, dt: datetime):
         gross_col = 'gross_mixed_electrical_and_thermal'
@@ -227,23 +306,24 @@ class ThermalStoragePeakShaveController(StorageController):
         )
         return proposal
 
-    def update_setpoint(
+    def optimise_dispatch_params(
             self,
             dt: datetime
     ):
-        if self.setpoint.universal_due(dt):
+        if self.controller.setpoints.universal_due(dt):
             proposal = SetPointProposal()
             proposal.universal = self.propose_setpoint(dt)
-            self.setpoint.set(proposal, dt)
+            self.controller.setpoints.set_setpoints(proposal, dt)
 
 
 @dataclass
-class WholesalePriceTranchBatteryController(StorageController):
+class WholesalePriceTranchBatteryDispatcher(StorageDispatcher):
     market_prices: MarketPrices
     tranche_energy: float = field(init=False)
     number_tranches: int = field(init=False)
 
     def __post_init__(self):
+        self._parent_post_init()
         if not self.equipment.nominal_charge_capacity == self.equipment.nominal_discharge_capacity:
             raise ValueError('Note that optimal dispatch for WholesalePriceTranchBatteryController '
                              'requires that charge and discharge capacities are equal')
@@ -275,18 +355,14 @@ class WholesalePriceTranchBatteryController(StorageController):
         discharge_times = sorted_price_tseries.iloc[-number_dispatch_pairs:, :].index
         charge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in charge_times])
         discharge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in discharge_times])
-        self.dispatch_schedule.charge_schedule.add_periods(charge_periods)
-        self.dispatch_schedule.discharge_schedule.add_periods(discharge_periods)
+        self.controller.append_dispatch_schedule(
+            charge_periods,
+            discharge_periods
+        )
 
-    def update_setpoint(
+    def optimise_dispatch_params(
             self,
             dt: datetime
     ):
-        if self.setpoint.schedule.universal.event_due(dt):
+        if self.controller.dispatch_schedule.setter_schedule.universal_params_due(dt):
             self.set_dispatch_schedule(dt)
-        timesetep_hours = self.meter.sample_rate / timedelta(hours=1)
-        setpoint_proposal = SetPointProposal(
-            charge=self.equipment.nominal_charge_capacity * timesetep_hours + self.demand_at_t(dt),
-            discharge=self.equipment.nominal_discharge_capacity * timesetep_hours - self.demand_at_t(dt)
-        )
-        self.setpoint.set(setpoint_proposal)

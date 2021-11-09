@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import List, Tuple
-import pandas as pd
 from datetime import timedelta, datetime
 from dataclasses import dataclass, field
 import calendar
@@ -162,28 +163,3 @@ class PeriodSchedule:
 
     def add_periods(self, new_periods: List[Period]):
         self.periods.extend(new_periods)
-
-
-@dataclass
-class Forecaster(ABC):
-    window: timedelta
-
-    @abstractmethod
-    def look_ahead(
-        self,
-        time_series: pd.DataFrame,
-        start_datetime: datetime,
-    ) -> pd.DataFrame:
-        pass
-
-
-@dataclass
-class PerfectForcaster(Forecaster):
-    def look_ahead(
-        self,
-        time_series: pd.DataFrame,
-        start_datetime: datetime,
-    ):
-        fmt = '%Y-%m-%d %H:%M'
-        end_time = start_datetime + self.window
-        return time_series[start_datetime.strftime(fmt): end_time.strftime(fmt)]

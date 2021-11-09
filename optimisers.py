@@ -57,6 +57,7 @@ class PeakShave(SetPointOptimiser):
         )
         return np.flip(sorted_arr)[index]
 
+
 @dataclass
 class TOUShiftingCalculator(SetPointOptimiser):
     @staticmethod
