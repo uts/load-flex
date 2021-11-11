@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta, datetime
 
 from equipment.equipment import Dispatch
-from time_tools.schedulers import DailyPeriod, Period, EventSchedule, DateRangePeriod
+from time_series_tools.schedulers import DailyPeriod, Period, EventSchedule, DateRangePeriod
 
 
 @dataclass

@@ -8,7 +8,7 @@ from dispatch_control.controllers import ParamController
 from dispatch_control.dispatch_schedulers import DispatchConstraintSchedule
 from dispatch_control.setpoints import DemandScenario
 from equipment.equipment import Equipment, Dispatch
-from metering import DispatchFlexMeter
+from time_series_tools.metering import DispatchFlexMeter
 
 
 @dataclass

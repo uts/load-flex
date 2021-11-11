@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-from time_tools.schedulers import EventSchedule, PeriodSchedule
+from time_series_tools.schedulers import EventSchedule, PeriodSchedule
 
 
 @dataclass

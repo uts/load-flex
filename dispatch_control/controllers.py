@@ -5,7 +5,7 @@ from typing import List
 
 from dispatch_control.dispatch_schedulers import DispatchSchedule
 from dispatch_control.setpoints import SetPoints, SetPointProposal
-from time_tools.schedulers import Period
+from time_series_tools.schedulers import Period
 
 
 @dataclass

@@ -6,10 +6,11 @@ from scipy.signal import find_peaks
 
 from ts_tariffs.sites import MeterData
 
-from time_tools.forecasters import Forecaster
+from time_series_tools.forecasters import Forecaster
 from validators import Validator
 
 MARKET_PRICE_COLS = ('price', )
+
 
 @dataclass
 class DispatchPairs:

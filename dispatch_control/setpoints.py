@@ -6,8 +6,8 @@ import pandas as pd
 from dispatch_control.dispatch_schedulers import DispatchConstraintSchedule
 from dispatch_control.parameters import ParamSetterSchedules
 from equipment.equipment import Dispatch
-from time_tools.forecasters import PerfectForcaster
-from time_tools.schedulers import SpecificEvents
+from time_series_tools.forecasters import PerfectForcaster
+from time_series_tools.schedulers import SpecificEvents
 
 
 @dataclass

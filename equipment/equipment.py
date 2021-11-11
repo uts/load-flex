@@ -7,7 +7,7 @@ from typing import Type, List, Union
 from numbers import Number
 from dataclasses import dataclass
 
-from time_tools.forecasters import Forecaster
+from time_series_tools.forecasters import Forecaster
 
 
 @dataclass
