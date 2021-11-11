@@ -2,8 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List
 
-from dispatch_control.setpoints import DemandScenario
-from equipment import Dispatch
+from equipment.equipment import Dispatch
 
 
 @dataclass

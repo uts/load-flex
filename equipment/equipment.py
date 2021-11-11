@@ -12,8 +12,10 @@ from time_tools.forecasters import Forecaster
 
 @dataclass
 class Dispatch:
-    """ Representation of dispatch(charge or discharge) represented
-    as positive floats
+    """ Representation of dispatch -> both charge and discharge as
+    as positive floats.
+
+    Net charge is represented as single float where positive indicates discharge
 
     Charge and discharge are enforced as mutually exclusive in terms of their
     float values being above zero (I.e. Discharge should never occur at the
@@ -52,7 +54,7 @@ class Dispatch:
             return True
 
     @classmethod
-    def from_raw_float(cls, proposal):
+    def from_raw_float(cls, proposal: float):
         """ Create instance from raw float where positive value
         is interpreted as dispatch and negative dispatch interpreted as charge
         """
@@ -78,11 +80,11 @@ class Equipment(ABC):
         return {x: getattr(self, x) for x in self.report_on}
 
     @abstractmethod
-    def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> float:
-        pass
-
-    @abstractmethod
-    def update_state(self, energy):
+    def dispatch_request(
+            self,
+            proposal: Dispatch,
+            sample_rate: timedelta
+    ) -> Dispatch:
         pass
 
 
@@ -109,23 +111,3 @@ class Storage(Equipment):
     @abstractmethod
     def update_state(self, energy):
         pass
-
-
-@dataclass
-class Dispatcher(ABC):
-    demand_arr: Union[List[Number], np.ndarray, pd.Series]
-    equipment: List[Type[Equipment]]
-    forecaster: Type[Forecaster]
-    remaining_demand_arr: np.ndarray = None
-
-    @abstractmethod
-    def dispatch(self):
-        pass
-
-
-class BasicDispatcher(Dispatcher):
-    def dispatch(self):
-        self.remaining_demand_arr = self.demand_arr.to_numpy()
-        for plant in self.equipment:
-            plant.dispatch()
-            self.remaining_demand_arr -= plant.dispatch_arr

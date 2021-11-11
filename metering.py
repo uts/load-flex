@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from ts_tariffs.sites import MeterData, MeterPlotConfig
 
-from equipment import Dispatch
+from equipment.equipment import Dispatch
 from validators import Validator
 
 POWER_METER_COLS = (

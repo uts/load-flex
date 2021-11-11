@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List
 
 from dispatch_control.parameters import ParamSetterSchedules
-from equipment import Dispatch
+from equipment.equipment import Dispatch
 from time_tools.schedulers import PeriodSchedule, Period
 
 

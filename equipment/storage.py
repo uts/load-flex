@@ -2,8 +2,8 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Tuple
 
-from equipment import Storage, Dispatch
-from state_models import StateBasedProperty
+from equipment.equipment import Storage, Dispatch
+from equipment.state_models import StateBasedProperty
 
 REPORT_ON = (
     'state_of_charge',
@@ -39,7 +39,11 @@ class Battery(Storage):
             self.cycle_count += delta_state_of_charge
         self.state_of_charge += delta_state_of_charge
 
-    def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> Dispatch:
+    def dispatch_request(
+            self,
+            proposal: Dispatch,
+            sample_rate: timedelta,
+    ) -> Dispatch:
         time_step_hours = sample_rate / timedelta(hours=1)
         dispatch = Dispatch(
             charge=min(
