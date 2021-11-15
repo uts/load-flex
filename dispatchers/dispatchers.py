@@ -99,7 +99,6 @@ class Dispatcher(ABC):
         self.meter.update_dispatch(
             dt,
             dispatch,
-            self.dispatch_on,
             {**self.controller.reportables, **self.equipment.status()}
         )
 
@@ -126,8 +125,12 @@ class StorageDispatcher(Dispatcher):
         pass
 
     def dispatch(self):
+        self.meter.set_reportables(
+            {**self.controller.reportables, **self.equipment.status()}.keys()
+        )
         for dt, demand in self.meter.tseries.iterrows():
             self.optimise_dispatch_params(dt)
+
             # Only invoke setpoints if no scheduled dispatch
             dispatch_proposal = self.scheduled_dispatch_proposal(dt)
             if self.controller.secondary_dispatch_schedule:
@@ -145,6 +148,7 @@ class StorageDispatcher(Dispatcher):
             dispatch_proposal.validate()
             dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
             self.commit_dispatch(dt, dispatch, demand[self.dispatch_on])
+        self.meter.consolidate_updates(self.dispatch_on)
 
 
 @dataclass

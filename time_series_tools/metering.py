@@ -92,15 +92,24 @@ class DispatchFlexMeter(MeterData):
             self,
             dt: datetime,
             dispatch: Dispatch,
-            dispatch_on: str,
             other: Dict[str, Union[float, str]] = None,
     ):
         pass
 
+    @abstractmethod
+    def consolidate_updates(self, dispatch_on: str):
+        pass
+
+    @abstractmethod
+    def reset_meter(self):
+        pass
 
 @dataclass
 class PowerFlexMeter(DispatchFlexMeter):
     dispatch_tseries: pd.DataFrame = field(init=False)
+
+    _updater_arrays: dict = field(init=False)
+    _reportables: List[str] = field(init=False)
 
     def __post_init__(self):
         Validator.data_cols(self.tseries, POWER_METER_COLS)
@@ -111,21 +120,40 @@ class PowerFlexMeter(DispatchFlexMeter):
         self.dispatch_tseries = pd.DataFrame(index=self.tseries.index)
         self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
 
+        self._updater_arrays = {
+            'dt': [],
+            'charge': [],
+            'discharge': [],
+            'net': []
+        }
+
+    def set_reportables(self, reportables: List[str]):
+        self._reportables = reportables
+        for reportable in self._reportables:
+            self._updater_arrays[reportable] = []
+
     def update_dispatch(
             self,
             dt: datetime,
             dispatch: Dispatch,
-            dispatch_on: str,
             other: Dict[str, Union[float, str]] = None,
-            return_net=False
     ):
-        self.dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
-        self.dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
-        flexed_net = self.tseries.loc[dt, dispatch_on] - dispatch.net_value
-        self.dispatch_tseries.loc[dt, 'flexed_net_energy'] = flexed_net
+        self._updater_arrays['charge'].append(dispatch.charge)
+        self._updater_arrays['discharge'].append(dispatch.discharge)
+        self._updater_arrays['net'].append(dispatch.net_value)
         if other:
             for key, value in other.items():
-                self.dispatch_tseries.loc[dt, key] = value
+                self._updater_arrays[key].append(value)
+
+    def consolidate_updates(self, dispatch_on: str):
+        self.dispatch_tseries['charge'] = self._updater_arrays['charge']
+        self.dispatch_tseries['discharge'] = self._updater_arrays['discharge']
+        self.dispatch_tseries['net'] = self._updater_arrays['net']
+        self.dispatch_tseries['flexed_net_energy'] = \
+            self.tseries[dispatch_on] - self.dispatch_tseries['net']
+
+        for key in self._reportables:
+            self.dispatch_tseries[key] = self._updater_arrays[key]
 
     def calculate_flexed_tseries(
             self,
@@ -135,6 +163,8 @@ class PowerFlexMeter(DispatchFlexMeter):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
         """
+        self.dispatch_tseries['flexed_net_energy'] = \
+            self.tseries['demand_energy'] - self.dispatch_tseries['net']
         self.flexed_tseries = Converter.power_meter_from_energy(
             self.dispatch_tseries['flexed_net_energy'],
             self.tseries['power_factor'],
@@ -158,6 +188,8 @@ class PowerFlexMeter(DispatchFlexMeter):
                 column_map,
                 self.plot_configs
             )
+    def reset_meter(self):
+        self.__post_init__()
 
 
 @dataclass
@@ -174,6 +206,9 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
     electrical_dispatch_tseries: pd.DataFrame = field(init=False)
     flexed_tseries: pd.DataFrame = field(init=False)
 
+    _updater_arrays: dict = field(init=False)
+    _reportables: List[str] = field(init=False)
+
     def __post_init__(self):
         Validator.data_cols(
             self.tseries,
@@ -184,9 +219,23 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.create_thermal_tseries()
         self.tseries['gross_mixed_electrical_and_thermal'] = \
             self.thermal_tseries['gross_mixed_electrical_and_thermal']
-        self.thermal_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
-        self.electrical_dispatch_tseries = pd.DataFrame(index=self.tseries.index)
+        self.thermal_dispatch_tseries = pd.DataFrame()
+        self.electrical_dispatch_tseries = pd.DataFrame()
         self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
+
+        self._updater_arrays = {
+            'dt': [],
+            'thermal_dispatch_tseries_charge': [],
+            'thermal_dispatch_tseries_discharge': [],
+            'electrical_dispatch_tseries_charge': [],
+            'electrical_dispatch_tseries_discharge': [],
+            'electrical_dispatch_tseries_energy_net': [],
+        }
+
+    def set_reportables(self, reportables: List[str]):
+        self._reportables = reportables
+        for reportable in self._reportables:
+            self._updater_arrays[reportable] = []
 
     def create_thermal_tseries(self):
         self.thermal_tseries = pd.DataFrame(index=self.tseries.index)
@@ -201,26 +250,35 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
             self,
             dt: datetime,
             dispatch: Dispatch,
-            dispatch_on: str,
             other: Dict[str, Union[float, str]] = None,
     ):
-        self.thermal_dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
-        self.thermal_dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
-        self.electrical_dispatch_tseries.loc[dt, 'charge'] = Converter.thermal_to_electrical(
-                self.thermal_dispatch_tseries.loc[dt, 'charge'],
-                self.thermal_tseries.loc[dt, 'flex_cop']
-            )
-        self.electrical_dispatch_tseries.loc[dt, 'discharge'] = Converter.thermal_to_electrical(
-                self.thermal_dispatch_tseries.loc[dt, 'discharge'],
-                self.thermal_tseries.loc[dt, 'load_cop']
-            )
-        self.electrical_dispatch_tseries.loc[dt, 'energy_net'] = \
-            self.electrical_dispatch_tseries.loc[dt, 'discharge'] \
-            - self.electrical_dispatch_tseries.loc[dt, 'charge'] \
+        self._updater_arrays['dt'].append(dt)
+        self._updater_arrays['thermal_dispatch_tseries_charge'].append(dispatch.charge)
+        self._updater_arrays['thermal_dispatch_tseries_discharge'].append(dispatch.discharge)
 
         if other:
             for key, value in other.items():
-                self.thermal_dispatch_tseries.loc[dt, key] = value
+                self._updater_arrays[key].append(value)
+
+    def consolidate_updates(self, dispatch_on: str):
+        self.thermal_dispatch_tseries.index = self._updater_arrays['dt']
+        self.thermal_dispatch_tseries['charge'] = self._updater_arrays['thermal_dispatch_tseries_charge']
+        self.thermal_dispatch_tseries['discharge'] = self._updater_arrays['thermal_dispatch_tseries_discharge']
+
+        for key in self._reportables:
+            self.thermal_dispatch_tseries[key] = self._updater_arrays[key]
+
+        self.electrical_dispatch_tseries['charge'] = Converter.thermal_to_electrical(
+            self.thermal_dispatch_tseries['charge'],
+            self.thermal_tseries['flex_cop']
+        )
+        self.electrical_dispatch_tseries['discharge'] = Converter.thermal_to_electrical(
+            self.thermal_dispatch_tseries['discharge'],
+            self.thermal_tseries['load_cop']
+        )
+        self.electrical_dispatch_tseries['energy_net'] = \
+            self.electrical_dispatch_tseries['discharge'] \
+            - self.electrical_dispatch_tseries['charge']
 
     def calculate_flexed_tseries(
             self,
@@ -263,6 +321,9 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
                 self.plot_configs,
                 self.thermal_properties
             )
+
+    def reset_meter(self):
+        self.__post_init__()
 
     @classmethod
     def from_dataframe(

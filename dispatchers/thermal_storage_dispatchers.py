@@ -71,14 +71,15 @@ class WholesalePriceTranchThermalDispatcher(WholesalePriceTranchDispatcher):
         self.calculate_tranches()
 
     def set_dispatch_schedule(self, dt):
-
         subload_forecast = self.market_prices.forecaster.look_ahead(
             self.meter.tseries['subload_energy'],
             dt
         )
-        subload_forecast =subload_forecast.resample(self.forecast_resolution).sum()
         price_forecast = self.market_prices.forecast(dt)
-        price_forecast = price_forecast.resample(self.forecast_resolution).mean()
+
+        if self.meter.sample_rate != self.forecast_resolution:
+            subload_forecast = subload_forecast.resample(self.forecast_resolution).sum()
+            price_forecast = price_forecast.resample(self.forecast_resolution).mean()
 
         price_forecast_charging = price_forecast
         # price_forecast_discharging should only include datetimes
