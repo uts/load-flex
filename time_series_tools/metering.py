@@ -121,7 +121,6 @@ class PowerFlexMeter(DispatchFlexMeter):
     ):
         self.dispatch_tseries.loc[dt, 'charge'] = dispatch.charge
         self.dispatch_tseries.loc[dt, 'discharge'] = dispatch.discharge
-        x = self.tseries.loc[dt, dispatch_on]
         flexed_net = self.tseries.loc[dt, dispatch_on] - dispatch.net_value
         self.dispatch_tseries.loc[dt, 'flexed_net_energy'] = flexed_net
         if other:

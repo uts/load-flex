@@ -67,7 +67,6 @@ class TOUShiftingCalculator(SetPointOptimiser):
         """
         return arr.max() - arr
 
-
     @staticmethod
     def cap_area(arr: np.ndarray):
         cap_arr = arr - arr.min()

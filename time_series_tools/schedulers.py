@@ -161,7 +161,7 @@ class DateRangePeriod(Period):
 
     def period_active(self, dt: datetime):
         active = False
-        if self.from_date <= dt <= self.to_date:
+        if self.from_date <= dt < self.to_date:
             active = True
         return active
 
@@ -194,6 +194,9 @@ class PeriodSchedule:
 
     def add_periods(self, new_periods: List[Period]):
         self.periods.extend(new_periods)
+
+    def clear_schedule(self):
+        self.periods = []
 
     @classmethod
     def from_daily_hours(

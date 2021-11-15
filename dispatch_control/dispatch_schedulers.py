@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 
 from dispatch_control.parameters import ParamSetterSchedules
-from equipment.equipment import Dispatch
+from equipment.equipment import Dispatch, Storage
 from time_series_tools.schedulers import PeriodSchedule, Period
 
 
@@ -16,25 +16,33 @@ class DispatchSchedule:
     setter_schedule: ParamSetterSchedules
     charge_schedule: PeriodSchedule
     discharge_schedule: PeriodSchedule
-    charge_energy: float = None
-    discharge_energy: float = None
+    equipment: Storage
+
+    @property
+    def charge_rate(self):
+        return self.equipment.charge_capacity
+
+    @property
+    def discharge_rate(self):
+        return self.equipment.discharge_capacity
 
     def scheduled_charge(self, dt: datetime):
         if self.charge_schedule.period_active(dt):
-            return self.charge_energy
+            return self.charge_rate
         else:
             return 0.0
 
     def scheduled_discharge(self, dt: datetime):
         if self.discharge_schedule.period_active(dt):
-            return self.discharge_energy
+            return self.discharge_rate
         else:
             return 0.0
 
-    def dispatch_proposal(self, dt) -> Dispatch:
+    def dispatch_proposal(self, dt, sample_rate: timedelta) -> Dispatch:
+        sample_rate_hours = sample_rate / timedelta(hours=1)
         return Dispatch(
-            charge=self.scheduled_charge(dt),
-            discharge=self.scheduled_discharge(dt)
+            charge=self.scheduled_charge(dt) * sample_rate_hours,
+            discharge=self.scheduled_discharge(dt) * sample_rate_hours
         )
 
     def append_schedule(
@@ -47,12 +55,18 @@ class DispatchSchedule:
         if discharge_periods:
             self.discharge_schedule.add_periods(discharge_periods)
 
+    def clear_schedule(self):
+        self.charge_schedule.clear_schedule()
+        self.discharge_schedule.clear_schedule()
+
     @classmethod
     def empty_schedule(cls):
         return cls(
             ParamSetterSchedules(),
             PeriodSchedule(),
             PeriodSchedule(),
+            0.0,
+            0.0
         )
 
 

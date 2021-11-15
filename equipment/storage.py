@@ -9,11 +9,11 @@ REPORT_ON = (
     'state_of_charge',
     'available_energy',
     'available_storage',
+    'cycle_count'
     )
 
 BATTERY_REPORT_ON = (
     *REPORT_ON,
-    'cycle_count'
 )
 
 THERMAL_REPORT_ON = (
@@ -48,12 +48,12 @@ class Battery(Storage):
         dispatch = Dispatch(
             charge=min(
                 proposal.charge,
-                self.nominal_charge_capacity * time_step_hours,
+                self.charge_capacity * time_step_hours,
                 self.available_storage
             ),
             discharge=min(
                 proposal.discharge,
-                self.nominal_discharge_capacity * time_step_hours,
+                self.discharge_capacity * time_step_hours,
                 self.available_energy,
             )
         )
@@ -66,17 +66,15 @@ class ThermalStorage(Storage):
     discharge_rate_model: StateBasedProperty
     charge_rate_model: StateBasedProperty
     charging_cop_model: StateBasedProperty
-    hot_reservoir_temperature: float
+    cycle_count: float = 0.0
     report_on: Tuple[str] = field(default=THERMAL_REPORT_ON, init=False)
 
     @property
     def discharge_capacity(self):
-        # Todo: update when model is written
         return self.discharge_rate_model.calculate(self)
 
     @property
     def charge_capacity(self):
-        # Todo: update when model is written
         return self.charge_rate_model.calculate(self)
 
     @property
@@ -92,6 +90,9 @@ class ThermalStorage(Storage):
             - dispatch.discharge
         delta_state_of_charge = delta_energy / self.storage_capacity
         self.state_of_charge += delta_state_of_charge
+
+        if delta_state_of_charge > 0.0:
+            self.cycle_count += delta_state_of_charge
 
     def dispatch_request(self, proposal: Dispatch, sample_rate: timedelta) -> Dispatch:
         time_step_hours = sample_rate / timedelta(hours=1)

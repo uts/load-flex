@@ -30,7 +30,43 @@ class StateBasedCapacity(StateBasedProperty):
 
 
 @dataclass
-class PCMStorageStateBasedDischargeCapacity(StateBasedProperty):
+class PCMDischargeCapacity(StateBasedProperty):
+    inlet_temp: float
+    outlet_temp: float
+    pcm_melt_temp: float
+    density: float
+    specific_heat_capacity: float
+    design_flow_rate: float
+
+    @property
+    def effectiveness(self):
+        return pcm_calcs.system_effectiveness(
+            self.inlet_temp,
+            self.outlet_temp,
+            self.pcm_melt_temp
+        )
+
+    def normalised_flow(self, state: Storage) -> float:
+        return pcm_calcs.normalised_flow_rate(
+            self.effectiveness,
+            state.state_of_charge
+        )
+
+    def calculate(self, state: Storage) -> float:
+        normalised_flow_rate = self.normalised_flow(state)
+        capacity = pcm_calcs.max_heat_exchange_rate(
+            normalised_flow_rate * self.design_flow_rate,
+            self.density,
+            self.specific_heat_capacity,
+            self.inlet_temp,
+            self.pcm_melt_temp,
+            self.effectiveness
+        )
+        return capacity
+
+
+@dataclass
+class PCMChargeCapacity(StateBasedProperty):
     inlet_temp: float
     outlet_temp: float
     pcm_melt_temp: float
@@ -39,18 +75,16 @@ class PCMStorageStateBasedDischargeCapacity(StateBasedProperty):
     design_flow_rate: float
 
     def calculate(self, state: Storage) -> float:
-        effectiveness = pcm_calcs.system_effectiveness(
-            self.inlet_temp,
-            self.outlet_temp,
-            self.pcm_melt_temp
-        )
-        normalised_flow = pcm_calcs.normalised_flow_rate(
-            effectiveness,
-            state.state_of_charge
-        )
-        return pcm_calcs.max_discharge_rate(
+        if 0.0 <= state.state_of_charge <= 0.15:
+            effectiveness = 1.0
+        elif 0.85 < state.state_of_charge:
+            effectiveness = 0.2
+        else:
+            effectiveness = pcm_calcs.charging_effectiveness(
+                state.state_of_charge
+            )
+        return - pcm_calcs.max_heat_exchange_rate(
             self.design_flow_rate,
-            normalised_flow,
             self.density,
             self.specific_heat_capacity,
             self.inlet_temp,

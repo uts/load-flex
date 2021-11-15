@@ -2,13 +2,17 @@ import datetime
 from abc import ABC, abstractmethod
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from dispatch_control.constraints import DispatchConstraints
 from dispatch_control.controllers import ParamController
 from dispatch_control.dispatch_schedulers import DispatchConstraintSchedule
 from dispatch_control.setpoints import DemandScenario
-from equipment.equipment import Equipment, Dispatch
+from equipment.equipment import Equipment, Dispatch, Storage
 from time_series_tools.metering import DispatchFlexMeter
+from time_series_tools.wholesale_prices import MarketPrices
+
+from time import time
 
 
 @dataclass
@@ -70,7 +74,19 @@ class Dispatcher(ABC):
         )
 
     def scheduled_dispatch_proposal(self, dt: datetime) -> Dispatch:
-        return self.controller.dispatch_schedule.dispatch_proposal(dt)
+        demand = self.demand_at_t(dt)
+        proposal = self.controller.primary_dispatch_schedule.dispatch_proposal(
+            dt,
+            self.meter.sample_rate
+        )
+        proposal.discharge = min(demand, proposal.discharge)
+        return proposal
+
+    def scheduled_secondary_dispatch_proposal(self, dt: datetime) -> Dispatch:
+        return self.controller.secondary_dispatch_schedule.dispatch_proposal(
+            dt,
+            self.meter.sample_rate
+        )
 
     def apply_special_constraints(self, proposal: Dispatch) -> Dispatch:
         return self.special_constraints.constrain(proposal)
@@ -91,3 +107,85 @@ class Dispatcher(ABC):
         self.dispatch_constraint_schedule.validate_dispatch(dispatch, dt)
         self.report_dispatch(dt, dispatch)
         self.update_historical_net_demand(demand - dispatch.net_value)
+
+
+@dataclass
+class StorageDispatcher(Dispatcher):
+    equipment: Storage
+
+    def __post_init__(self):
+        self._parent_post_init()
+
+    @abstractmethod
+    def optimise_dispatch_params(
+            self,
+            dt: datetime,
+    ):
+        """ Update setpoints for gross curve load shifting
+        """
+        pass
+
+    def dispatch(self):
+        for dt, demand in self.meter.tseries.iterrows():
+            self.optimise_dispatch_params(dt)
+            # Only invoke setpoints if no scheduled dispatch
+            dispatch_proposal = self.scheduled_dispatch_proposal(dt)
+            if self.controller.secondary_dispatch_schedule:
+                if dispatch_proposal.no_dispatch:
+                    dispatch_proposal = self.scheduled_secondary_dispatch_proposal(dt)
+            if self.controller.setpoints:
+                if dispatch_proposal.no_dispatch:
+                    demand_scenario = DemandScenario(
+                        demand[self.dispatch_on],
+                        dt,
+                        self.meter.tseries['balance_energy'].loc[dt]
+                    )
+                    dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
+            dispatch_proposal = self.apply_special_constraints(dispatch_proposal)
+            dispatch_proposal.validate()
+            dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
+            self.commit_dispatch(dt, dispatch, demand[self.dispatch_on])
+
+
+@dataclass
+class WholesalePriceTranchDispatcher(StorageDispatcher):
+    market_prices: MarketPrices
+    forecast_resolution: timedelta = timedelta(hours=0.5)
+    tranche_energy: float = field(init=False)
+    number_tranches: int = field(init=False)
+
+    def __post_init__(self):
+        self._parent_post_init()
+        self.calculate_tranches()
+        # self.initialise_setpoint(self.meter.first_datetime())
+
+    def calculate_tranches(self):
+        """Tranches defined by how much energy can be dispatched in a single time step as per the
+        forecast resolution and how much storage capacity the battery has (assume smallest
+        of charge or discharge rates)
+        """
+        time_step_hours = self.forecast_resolution / timedelta(hours=1)
+        dispatch_rate = min(
+            self.equipment.nominal_charge_capacity,
+            self.equipment.nominal_discharge_capacity
+        )
+
+        self.tranche_energy = dispatch_rate * time_step_hours
+        # Need positive number of whole tranches as they will be allocated
+        # equally to charge and discharge - this will leave remainder unallocated
+        self.number_tranches = int(self.equipment.storage_capacity / self.tranche_energy)
+        if self.number_tranches % 2 != 0:
+            self.number_tranches -= 1
+
+    @abstractmethod
+    def set_dispatch_schedule(self, dt):
+        pass
+
+    @abstractmethod
+    def optimise_dispatch_params(
+            self,
+            dt: datetime,
+    ):
+        """ Update setpoints for gross curve load shifting
+        """
+        pass

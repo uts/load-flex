@@ -1,6 +1,7 @@
 import datetime
 from dataclasses import dataclass
 
+import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
 
@@ -61,7 +62,11 @@ class MarketPrices(MeterData):
     def forecast(self, dt: datetime):
         return self.forecaster.look_ahead(self.tseries, dt)
 
-    def schedule_dispatch_pairs(self):
+    def calculate_ts_bill(self, consumption: MeterData, consumption_col: str):
+        bill = pd.concat([self.tseries, consumption.tseries[consumption_col]], axis=1)
+        bill['energy_cost'] = bill['price'] * bill[consumption_col]
+        return bill
 
-        pass
-
+    def calculate_bill_total(self, consumption: MeterData, consumption_col: str):
+        bill = self.calculate_ts_bill(consumption, consumption_col)
+        return bill['energy_cost'].sum(skipna=True)

@@ -35,23 +35,22 @@ class Dispatch:
     def no_dispatch(self):
         return self.net_value == 0.0
 
-    @property
-    def valid_dispatch(self) -> bool:
+    def validate(self):
         """ Enforces property that charge and discharge are mutually exclusive.
         Null charge or discharge is expressed as float of value 0.0
         """
-        if not min(self.charge, self.discharge) == 0.0:
-            raise ValueError(
-                'DispatchProposal attributes charge or discharge cannot'
-                ' both be greater than 0.0'
-            )
-        elif self.charge < 0.0 or self.discharge < 0.0:
+
+        if self.charge < 0.0 or self.discharge < 0.0:
             raise ValueError(
                 'DispatchProposal attributes charge or discharge cannot'
                 ' be negative'
             )
-        else:
-            return True
+
+        if not min(self.charge, self.discharge) == 0.0:
+            raise ValueError(
+                'DispatchProposal attributes charge and discharge cannot'
+                ' both be greater than 0.0'
+            )
 
     @classmethod
     def from_raw_float(cls, proposal: float):
@@ -95,6 +94,14 @@ class Storage(Equipment):
     storage_capacity: float
     round_trip_efficiency: float
     state_of_charge: float
+
+    @property
+    def charge_capacity(self):
+        return self.nominal_charge_capacity
+
+    @property
+    def discharge_capacity(self):
+        return self.nominal_discharge_capacity
 
     @property
     def available_energy(self):
