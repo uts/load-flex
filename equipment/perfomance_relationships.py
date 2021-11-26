@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class PCMThermalStoragePerformance:
     @staticmethod
     def system_effectiveness(
@@ -68,14 +69,14 @@ class PCMThermalStoragePerformance:
         n = (effectiveness - (
                 c0 +
                 c1 * state_of_charge +
-                c4 * state_of_charge ** 2 +
-                c5 * state_of_charge ** 3 +
-                c6 * state_of_charge ** 4)
-                ) \
+                c4 * pow(state_of_charge, 2) +
+                c5 * pow(state_of_charge, 3) +
+                c6 * pow(state_of_charge, 4)
+        )
+        ) \
             / (c2 + c3 * state_of_charge)
         # Throttle between 1.25 and 0.25
-        return np.clip(n, 0.25, 1.25)
-
+        return np.clip(n, 0.20, 1.25)
 
     @staticmethod
     def flow_rate(

@@ -30,6 +30,13 @@ class StateBasedCapacity(StateBasedProperty):
 
 
 @dataclass
+class SpoofCapacity(StateBasedProperty):
+    spoof_value: float
+
+    def calculate(self, state: Equipment):
+        return self.spoof_value
+
+@dataclass
 class PCMDischargeCapacity(StateBasedProperty):
     inlet_temp: float
     outlet_temp: float
@@ -39,7 +46,8 @@ class PCMDischargeCapacity(StateBasedProperty):
     design_flow_rate: float
 
     @property
-    def effectiveness(self):
+    def target_effectiveness(self):
+
         return pcm_calcs.system_effectiveness(
             self.inlet_temp,
             self.outlet_temp,
@@ -48,7 +56,7 @@ class PCMDischargeCapacity(StateBasedProperty):
 
     def normalised_flow(self, state: Storage) -> float:
         return pcm_calcs.normalised_flow_rate(
-            self.effectiveness,
+            self.target_effectiveness,
             state.state_of_charge
         )
 
@@ -60,7 +68,7 @@ class PCMDischargeCapacity(StateBasedProperty):
             self.specific_heat_capacity,
             self.inlet_temp,
             self.pcm_melt_temp,
-            self.effectiveness
+            self.target_effectiveness
         )
         return capacity
 

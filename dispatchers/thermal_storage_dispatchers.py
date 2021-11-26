@@ -62,7 +62,6 @@ class ThermalStoragePeakShaveDispatcher(StorageDispatcher):
 @dataclass
 class WholesalePriceTranchThermalDispatcher(WholesalePriceTranchDispatcher):
     market_prices: MarketPrices
-    forecast_resolution: timedelta = timedelta(hours=0.5)
     tranche_energy: float = None
     number_tranches: int = None
 

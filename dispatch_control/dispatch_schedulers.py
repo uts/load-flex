@@ -10,7 +10,7 @@ from time_series_tools.schedulers import PeriodSchedule, Period
 
 
 @dataclass
-class DispatchSchedule:
+class EquipmentDispatchSchedule:
     """ Schedule for charging and discharging at specific rates
     """
     setter_schedule: ParamSetterSchedules
@@ -60,13 +60,12 @@ class DispatchSchedule:
         self.discharge_schedule.clear_schedule()
 
     @classmethod
-    def empty_schedule(cls):
+    def empty_schedule(cls, equipment: Storage):
         return cls(
             ParamSetterSchedules(),
             PeriodSchedule(),
             PeriodSchedule(),
-            0.0,
-            0.0
+            equipment
         )
 
 

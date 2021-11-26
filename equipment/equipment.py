@@ -53,13 +53,13 @@ class Dispatch:
             )
 
     @classmethod
-    def from_raw_float(cls, proposal: float):
+    def from_raw_float(cls, dispatch_value: float):
         """ Create instance from raw float where positive value
         is interpreted as dispatch and negative dispatch interpreted as charge
         """
         return cls(
-            charge=-min(0.0, proposal),
-            discharge=max(0.0, proposal)
+            charge=-min(0.0, dispatch_value),
+            discharge=max(0.0, dispatch_value)
         )
 
 

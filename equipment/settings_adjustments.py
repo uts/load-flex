@@ -40,21 +40,12 @@ class CompressorSuctionPressure(Setting):
     This does affect throughput and will change the cooling/freezing time required
     for a given cooling cycle
     """
-    compressor_electrical_capacity: float
     baseline_cop: float
+    low_pressure_cop: float
     high_pressure_cop: float
-    repayment_schedule: EventSchedule
-    energy_to_repay: float = 0.0
-    extended_cycle_dispatch: DispatchBlock = field(init=False)
 
     @property
-    def repayment_duration(self) -> timedelta:
-        return timedelta(
-            hours=self.energy_to_repay / self.compressor_electrical_capacity
-        )
-
-    @property
-    def load_diff_proportion(self):
+    def high_pressure_load_factor(self):
         """ Proportion of decrease in electrical demand based on higher suction pressure due to
         cop increase
 
@@ -62,30 +53,18 @@ class CompressorSuctionPressure(Setting):
         """
         return 1.0 - self.baseline_cop / self.high_pressure_cop
 
-    def update_energy_repayment(self, dt: datetime):
+    @property
+    def low_pressure_load_factor(self):
+        """ Proportion of increase in electrical demand based on lower suction pressure due to
+        cop increase
         """
-        """
-        self.extended_cycle_dispatch = DispatchBlock(
-            self.compressor_electrical_capacity,
-            0.0,
-            DateRangePeriod(
-                dt,
-                dt + self.repayment_duration
-            )
-        )
+        return 1.0 - self.baseline_cop / self.low_pressure_cop
 
     def apply_setting(self, demand: float) -> Dispatch:
-        demand_reduction = demand * self.load_diff_proportion
-        return Dispatch.from_raw_float(demand_reduction)
+        delta_energy = demand * self.high_pressure_load_factor
+        return Dispatch(charge=0.0, discharge=delta_energy)
 
-    def update_energy_to_repay(
-            self,
-            dispatch: Dispatch,
-    ):
-        self.energy_to_repay += dispatch.net_value
+    def repay_dispatch(self, demand: float) -> Dispatch:
+        delta_energy = demand * self.low_pressure_load_factor
+        return Dispatch(charge=-delta_energy, discharge=0.0)
 
-    def repay_energy(self, dt: datetime):
-        if self.extended_cycle_dispatch.dispatch_period.period_active(dt):
-            return self.extended_cycle_dispatch
-        else:
-            Dispatch(0.0, 0.0)

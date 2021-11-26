@@ -120,6 +120,18 @@ class EventSchedule:
         weekends: bool = False,
         weekdays: bool = False,
     ):
+        if not any([
+            monday,
+            tuesday,
+            wednesday,
+            thursday,
+            friday,
+            saturday,
+            sunday,
+            weekdays,
+            weekends
+        ]):
+            all_days = True
         return cls([
             SpecificHourDailyEvents(
                 hours,

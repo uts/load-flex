@@ -17,7 +17,7 @@ POWER_METER_COLS = (
     'demand_power',
     'generation_energy',
     'power_factor',
-    'demand_apparent'
+    'demand_apparent',
 )
 
 THERMAL_METER_COLS = (
@@ -56,11 +56,12 @@ class Converter:
         return electrical * coefficient_of_performance
 
     @staticmethod
-    def power_meter_from_energy(
-        energy_series: pd.Series,
-        power_factor_series: pd.Series,
-        sample_rate: timedelta
-    ):
+    def power_meter_tseries_from_energy(
+            energy_series: pd.Series,
+            power_factor_series: pd.Series,
+            sample_rate: timedelta,
+            subload_series: pd.Series = None
+    ) -> pd.DataFrame:
         energy_series.rename('demand_energy', inplace=True)
         df = pd.DataFrame(energy_series)
         df['demand_power'] = Converter.energy_to_power(
@@ -71,6 +72,8 @@ class Converter:
             df['demand_power'],
             power_factor_series
         )
+        df['power_factor'] = power_factor_series
+
         return df
 
 
@@ -104,6 +107,7 @@ class DispatchFlexMeter(MeterData):
     def reset_meter(self):
         pass
 
+
 @dataclass
 class PowerFlexMeter(DispatchFlexMeter):
     dispatch_tseries: pd.DataFrame = field(init=False)
@@ -126,6 +130,15 @@ class PowerFlexMeter(DispatchFlexMeter):
             'discharge': [],
             'net': []
         }
+        self._reportables = []
+
+    def scale_meter_data(self, factor: float, exclude_cols: List[str] = None):
+        """ Multiply all .tseries cols by a common factor
+        """
+        scale_cols = [col for col in self.tseries if col not in exclude_cols]
+        for col in scale_cols:
+            self.tseries[col] *= factor
+
 
     def set_reportables(self, reportables: List[str]):
         self._reportables = reportables
@@ -152,8 +165,9 @@ class PowerFlexMeter(DispatchFlexMeter):
         self.dispatch_tseries['flexed_net_energy'] = \
             self.tseries[dispatch_on] - self.dispatch_tseries['net']
 
-        for key in self._reportables:
-            self.dispatch_tseries[key] = self._updater_arrays[key]
+        if self._reportables:
+            for key in self._reportables:
+                self.dispatch_tseries[key] = self._updater_arrays[key]
 
     def calculate_flexed_tseries(
             self,
@@ -163,15 +177,13 @@ class PowerFlexMeter(DispatchFlexMeter):
         """ Adjust power, apparent power profiles according to a
          change in demand energy
         """
-        self.dispatch_tseries['flexed_net_energy'] = \
-            self.tseries['demand_energy'] - self.dispatch_tseries['net']
-        self.flexed_tseries = Converter.power_meter_from_energy(
+
+        self.flexed_tseries = Converter.power_meter_tseries_from_energy(
             self.dispatch_tseries['flexed_net_energy'],
             self.tseries['power_factor'],
             self.sample_rate
         )
         self.flexed_tseries['generation_energy'] = self.tseries['generation_energy']
-        self.flexed_tseries['power_factor'] = self.tseries['power_factor']
 
         if return_new_meter:
             column_map = {
@@ -188,6 +200,7 @@ class PowerFlexMeter(DispatchFlexMeter):
                 column_map,
                 self.plot_configs
             )
+
     def reset_meter(self):
         self.__post_init__()
 
@@ -285,7 +298,7 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
             name,
             return_new_meter: bool = False,
     ):
-        self.flexed_tseries = Converter.power_meter_from_energy(
+        self.flexed_tseries = Converter.power_meter_tseries_from_energy(
             self.tseries['demand_energy'] - self.electrical_dispatch_tseries['energy_net'],
             self.tseries['power_factor'],
             self.sample_rate

@@ -161,11 +161,17 @@ class WholesalePriceTranchBatteryDispatcher(WholesalePriceTranchDispatcher):
     def set_dispatch_schedule(self, dt):
         price_forecast = self.market_prices.forecast(dt)
         sorted_price_tseries = price_forecast.sort_values(by='price')
-        number_dispatch_pairs = int(self.number_tranches / 2)
+
+        if self.meter.sample_rate != self.forecast_resolution:
+            price_forecast = price_forecast.resample(self.forecast_resolution).mean()
+
+        number_dispatch_slots = int(self.number_tranches / 2)
+        number_dispatch_pairs = min(int(len(price_forecast) / 2), number_dispatch_slots)
+
         charge_times = sorted_price_tseries.iloc[:number_dispatch_pairs, :].index
         discharge_times = sorted_price_tseries.iloc[-number_dispatch_pairs:, :].index
-        charge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in charge_times])
-        discharge_periods = list([DateRangePeriod(x, x + self.meter.sample_rate) for x in discharge_times])
+        charge_periods = list([DateRangePeriod(x, x + self.forecast_resolution) for x in charge_times])
+        discharge_periods = list([DateRangePeriod(x, x + self.forecast_resolution) for x in discharge_times])
 
         self.controller.update_primary_dispatch_schedule(
             charge_periods,
