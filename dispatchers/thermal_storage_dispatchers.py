@@ -49,7 +49,7 @@ class ThermalStoragePeakShaveDispatcher(StorageDispatcher):
         )
         return proposal
 
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime
     ):
@@ -70,11 +70,13 @@ class WholesalePriceTranchThermalDispatcher(WholesalePriceTranchDispatcher):
         self.calculate_tranches()
 
     def set_dispatch_schedule(self, dt):
+        # Use market forecaster for market prices and load
+        # to ensure foresight is equivalent
+        price_forecast = self.market_prices.forecast(dt)
         subload_forecast = self.market_prices.forecaster.look_ahead(
             self.meter.tseries['subload_energy'],
             dt
         )
-        price_forecast = self.market_prices.forecast(dt)
 
         if self.meter.sample_rate != self.forecast_resolution:
             subload_forecast = subload_forecast.resample(self.forecast_resolution).sum()
@@ -101,7 +103,7 @@ class WholesalePriceTranchThermalDispatcher(WholesalePriceTranchDispatcher):
             clean_slate=True
         )
 
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime
     ):

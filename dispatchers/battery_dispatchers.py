@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 import numpy as np
 
 from dispatch_control.setpoints import SetPointProposal
@@ -9,7 +9,6 @@ from dispatchers.dispatchers import StorageDispatcher, WholesalePriceTranchDispa
 from equipment.storage import Battery
 from time_series_tools.schedulers import DateRangePeriod
 from optimisers import PeakShave, TOUShiftingCalculator
-from time_series_tools.wholesale_prices import MarketPrices
 
 
 @dataclass
@@ -40,7 +39,7 @@ class PeakShaveBatteryDispatcher(StorageDispatcher):
         )
         return np.flip(sorted_arr)[index]
 
-    def optimise_dispatch_params(self, dt: datetime):
+    def schedule_dispatch_params(self, dt: datetime):
         proposal = SetPointProposal()
         if self.controller.setpoints.universal_due(dt):
             proposal.universal = self.propose_setpoint(dt)
@@ -66,7 +65,7 @@ class ConservativePeakShaveComboBatteryController(PeakShaveBatteryDispatcher):
             universal_params_dt=self.meter.first_datetime()
         )
 
-    def optimise_dispatch_params(self, dt: datetime):
+    def schedule_dispatch_params(self, dt: datetime):
         proposal = SetPointProposal()
         if self.controller.setpoints.universal_due(dt):
             proposal.universal = max(
@@ -110,7 +109,7 @@ class TouBatteryDispatcher(StorageDispatcher):
             self.equipment.available_energy
         )
 
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime,
     ):
@@ -133,7 +132,7 @@ class TouPeakShaveComboBatteryController(TouBatteryDispatcher):
             discharge_params_dt = self.meter.first_datetime()
         )
 
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime,
     ):
@@ -158,7 +157,7 @@ class WholesalePriceTranchBatteryDispatcher(WholesalePriceTranchDispatcher):
         self.calculate_tranches()
         # self.initialise_setpoint(self.meter.first_datetime())
 
-    def set_dispatch_schedule(self, dt):
+    def set_dispatch_schedule(self, dt: datetime):
         price_forecast = self.market_prices.forecast(dt)
         sorted_price_tseries = price_forecast.sort_values(by='price')
 
@@ -178,30 +177,8 @@ class WholesalePriceTranchBatteryDispatcher(WholesalePriceTranchDispatcher):
             discharge_periods,
             clean_slate=True
         )
-        # # Get blocks of time greater than two time intervals where no dispatch occurs
-        # dispatch_periods = charge_periods + discharge_periods
-        # period_blocks = zip(dispatch_periods[:-1], dispatch_periods[1:])
-        # between_period_block_slices = [slice(x[0].to_date, x[1].from_date) for x in period_blocks]
-        # secondary_charge_periods = []
-        # secondary_discharge_periods = []
-        # for block_slice in between_period_block_slices:
-        #     prices = price_forecast.loc[block_slice].sort_values(by='price')
-        #     if len(prices) > 2:
-        #         secondary_charge_periods.append(DateRangePeriod(
-        #             prices.index[0],
-        #             prices.index[0] + self.meter.sample_rate
-        #         ))
-        #         secondary_discharge_periods.append(DateRangePeriod(
-        #             prices.index[-1],
-        #             prices.index[-1] + self.meter.sample_rate
-        #         ))
-        # self.controller.update_secondary_dispatch_schedule(
-        #     secondary_charge_periods,
-        #     secondary_discharge_periods,
-        #       clean_slate = True
-        # )
 
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime
     ):

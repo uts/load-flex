@@ -25,6 +25,10 @@ THERMAL_METER_COLS = (
     'subload_energy',
 )
 
+GAS_COLS = (
+    'gas',
+)
+
 
 class Converter:
     @staticmethod
@@ -91,7 +95,7 @@ class DispatchFlexMeter(MeterData):
         pass
 
     @abstractmethod
-    def update_dispatch(
+    def update_dispatch_at_t(
             self,
             dt: datetime,
             dispatch: Dispatch,
@@ -139,13 +143,12 @@ class PowerFlexMeter(DispatchFlexMeter):
         for col in scale_cols:
             self.tseries[col] *= factor
 
-
     def set_reportables(self, reportables: List[str]):
         self._reportables = reportables
         for reportable in self._reportables:
             self._updater_arrays[reportable] = []
 
-    def update_dispatch(
+    def update_dispatch_at_t(
             self,
             dt: datetime,
             dispatch: Dispatch,
@@ -259,7 +262,7 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
         self.thermal_tseries['gross_mixed_electrical_and_thermal'] = \
             self.thermal_tseries['subload_energy'] + self.tseries['balance_energy']
 
-    def update_dispatch(
+    def update_dispatch_at_t(
             self,
             dt: datetime,
             dispatch: Dispatch,
@@ -371,3 +374,59 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
             electrical_meter.plot_configs,
             thermal_properties
         )
+
+
+@dataclass
+class GasToElectricityFlexMeter(PowerFlexMeter):
+    tseries: pd.DataFrame
+    dispatch_tseries: pd.DataFrame = field(init=False)
+    flexed_tseries: pd.DataFrame = field(init=False)
+
+    _updater_arrays: dict = field(init=False)
+    _reportables: List[str] = field(init=False)
+
+    def __post_init__(self):
+        Validator.data_cols(
+            self.tseries,
+            GAS_COLS
+        )
+        self.dispatch_tseries = pd.DataFrame(index=self.tseries.index)
+        self.flexed_tseries = pd.DataFrame(index=self.tseries.index)
+
+        self._updater_arrays = {
+            'dt': [],
+            'charge': [],
+            'discharge': [],
+            'net': []
+        }
+        self._reportables = []
+
+    def calculate_flexed_tseries(
+            self,
+            name,
+            return_new_meter: bool = False,
+    ):
+        """
+        """
+        self.flexed_tseries = self.dispatch_tseries['flexed_net_energy']
+
+        if return_new_meter:
+            column_map = {
+                'gas': {
+                    'ts': 'gas',
+                    'units': self.units['gas']
+                }
+            }
+            return GasToElectricityFlexMeter.from_dataframe(
+                name,
+                self.flexed_tseries,
+                self.sample_rate,
+                column_map,
+                self.plot_configs
+            )
+
+    def thermal_dispatch_to_electrical_load(
+            self,
+            coefficient_of_performance: Union[float, np.ndarray, pd.Series]
+    ) -> pd.DataFrame:
+        return self.dispatch_tseries[['net']] / coefficient_of_performance

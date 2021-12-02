@@ -61,7 +61,7 @@ class CompressorSuctionPressureDispatcher:
 
     def report_dispatch(self, dt: datetime, dispatch: Dispatch):
         dispatch.validate()
-        self.meter.update_dispatch(
+        self.meter.update_dispatch_at_t(
             dt,
             dispatch,
         )

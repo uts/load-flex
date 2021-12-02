@@ -1,13 +1,10 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from datetime import timedelta
 
-import pandas as pd
-import numpy as np
-from typing import Type, List, Union
-from numbers import Number
+from typing import List
 from dataclasses import dataclass
-
-from time_series_tools.forecasters import Forecaster
 
 
 @dataclass
@@ -48,9 +45,16 @@ class Dispatch:
 
         if not min(self.charge, self.discharge) == 0.0:
             raise ValueError(
-                'DispatchProposal attributes charge and discharge cannot'
+                'Dispatch charge and discharge cannot'
                 ' both be greater than 0.0'
             )
+
+    def to_thermal(self, cop: float) -> ThermalDispatch:
+        return ThermalDispatch(
+            charge=self.charge * cop,
+            discharge=self.discharge * cop,
+            coefficient_of_performance=cop
+        )
 
     @classmethod
     def from_raw_float(cls, dispatch_value: float):
@@ -61,6 +65,66 @@ class Dispatch:
             charge=-min(0.0, dispatch_value),
             discharge=max(0.0, dispatch_value)
         )
+
+
+@dataclass
+class ThermalDispatch(Dispatch):
+    coefficient_of_performance: float
+
+    def to_electrical(self, cop: float = None) -> Dispatch:
+        """ Convert thermal dispatch into equivalent electrical dispatch
+        based on COP
+        """
+        if not cop:
+            cop = self.coefficient_of_performance
+        return Dispatch(
+            self.charge / cop,
+            self.discharge / cop
+        )
+
+
+@dataclass
+class SubstitutionDispatch(Dispatch):
+    """ Represents the replacement of one type of dispatch with another
+    (e.g. electric hot water replaced by heat pump).
+
+    Dispatch must be same type such that summation of charge and discharge is meaningful
+    (e.g. electric and electric, thermal and thermal, or gas and gas)
+
+    Unlike normal Dispatch, it is expected that charge and discharge are mutually inclusive
+    but their rates reflect the difference in efficiency/performance of the baseline and
+    substitute supply
+    """
+    @classmethod
+    def from_dispatches(cls, base_dispatch, sub_dispatch):
+        """ Instantiate SubstitutionDispatch - base_dispatch replacement is equivalent to
+        discharge (it indicates quantum removed from load curve), sub_dispatch is
+        equivalent to charge (indicates quantum added to load curve)
+        """
+        return cls(
+            sub_dispatch,
+            base_dispatch
+        )
+
+    def validate(self):
+        """ Enforces property that charge and discharge are mutually inlcusive.
+        Null charge or discharge is expressed as float of value 0.0
+        """
+
+        if self.charge < 0.0 or self.discharge < 0.0:
+            raise ValueError(
+                'DispatchProposal attributes charge or discharge cannot'
+                ' be negative'
+            )
+
+        if all([
+            not self.charge == self.discharge == 0.0,
+            self.charge * self.discharge == 0.0
+        ]):
+            raise ValueError(
+                'Substitution charge and discharge are mutually inclusive - '
+                ' they must both be greater than 0.0, or both be equal to 0.0'
+            )
 
 
 @dataclass
@@ -77,6 +141,16 @@ class Equipment(ABC):
 
     def status(self) -> dict:
         return {x: getattr(self, x) for x in self.report_on}
+
+    @abstractmethod
+    @property
+    def input_capacity(self):
+        pass
+
+    @abstractmethod
+    @property
+    def output_capacity(self):
+        pass
 
     @abstractmethod
     def dispatch_request(
@@ -96,11 +170,11 @@ class Storage(Equipment):
     state_of_charge: float
 
     @property
-    def charge_capacity(self):
+    def input_capacity(self):
         return self.nominal_charge_capacity
 
     @property
-    def discharge_capacity(self):
+    def output_capacity(self):
         return self.nominal_discharge_capacity
 
     @property

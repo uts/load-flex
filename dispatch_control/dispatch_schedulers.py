@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List
 
 from dispatch_control.parameters import ParamSetterSchedules
-from equipment.equipment import Dispatch, Storage
+from equipment.equipment import Dispatch, Storage, Equipment
 from time_series_tools.schedulers import PeriodSchedule, Period
 
 
@@ -16,15 +16,15 @@ class EquipmentDispatchSchedule:
     setter_schedule: ParamSetterSchedules
     charge_schedule: PeriodSchedule
     discharge_schedule: PeriodSchedule
-    equipment: Storage
+    equipment: Equipment
 
     @property
     def charge_rate(self):
-        return self.equipment.charge_capacity
+        return self.equipment.input_capacity
 
     @property
     def discharge_rate(self):
-        return self.equipment.discharge_capacity
+        return self.equipment.output_capacity
 
     def scheduled_charge(self, dt: datetime):
         if self.charge_schedule.period_active(dt):

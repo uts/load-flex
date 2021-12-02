@@ -1,4 +1,3 @@
-import datetime
 from abc import ABC, abstractmethod
 
 from dataclasses import dataclass, field
@@ -11,8 +10,6 @@ from dispatch_control.setpoints import DemandScenario
 from equipment.equipment import Equipment, Dispatch, Storage
 from time_series_tools.metering import DispatchFlexMeter
 from time_series_tools.wholesale_prices import MarketPrices
-
-from time import time
 
 
 @dataclass
@@ -40,7 +37,7 @@ class Dispatcher(ABC):
         pass
 
     @abstractmethod
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime,
     ):
@@ -48,9 +45,28 @@ class Dispatcher(ABC):
         """
         pass
 
-    @abstractmethod
     def dispatch(self):
-        pass
+        self.meter.set_reportables(
+            {**self.controller.reportables, **self.equipment.status()}.keys()
+        )
+        for dt, demand in self.meter.tseries.iterrows():
+            self.schedule_dispatch_params(dt)
+
+            # Only invoke setpoints if no scheduled dispatch
+            dispatch_proposal = self.scheduled_dispatch_proposal(dt, demand[self.dispatch_on])
+            if self.controller.setpoints:
+                if dispatch_proposal.no_dispatch:
+                    demand_scenario = DemandScenario(
+                        demand[self.dispatch_on],
+                        dt,
+                        demand['balance_energy']
+                    )
+                    dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
+            dispatch_proposal = self.apply_special_constraints(dispatch_proposal)
+            dispatch_proposal.validate()
+            dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
+            self.commit_dispatch(dt, dispatch, demand[self.dispatch_on])
+        self.meter.consolidate_updates(self.dispatch_on)
 
     def add_setpoint_set_event(
             self,
@@ -73,20 +89,13 @@ class Dispatcher(ABC):
             self.dispatch_constraint_schedule
         )
 
-    def scheduled_dispatch_proposal(self, dt: datetime) -> Dispatch:
-        demand = self.demand_at_t(dt)
+    def scheduled_dispatch_proposal(self, dt: datetime, demand: float) -> Dispatch:
         proposal = self.controller.primary_dispatch_schedule.dispatch_proposal(
             dt,
             self.meter.sample_rate
         )
         proposal.discharge = min(demand, proposal.discharge)
         return proposal
-
-    def scheduled_secondary_dispatch_proposal(self, dt: datetime) -> Dispatch:
-        return self.controller.secondary_dispatch_schedule.dispatch_proposal(
-            dt,
-            self.meter.sample_rate
-        )
 
     def apply_special_constraints(self, proposal: Dispatch) -> Dispatch:
         return self.special_constraints.constrain(proposal)
@@ -96,7 +105,7 @@ class Dispatcher(ABC):
         self.historical_min_demand = min(net_demand, self.historical_peak_demand)
 
     def report_dispatch(self, dt: datetime, dispatch: Dispatch):
-        self.meter.update_dispatch(
+        self.meter.update_dispatch_at_t(
             dt,
             dispatch,
             {**self.controller.reportables, **self.equipment.status()}
@@ -116,39 +125,11 @@ class StorageDispatcher(Dispatcher):
         self._parent_post_init()
 
     @abstractmethod
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime,
     ):
-        """ Update setpoints for gross curve load shifting
-        """
         pass
-
-    def dispatch(self):
-        self.meter.set_reportables(
-            {**self.controller.reportables, **self.equipment.status()}.keys()
-        )
-        for dt, demand in self.meter.tseries.iterrows():
-            self.optimise_dispatch_params(dt)
-
-            # Only invoke setpoints if no scheduled dispatch
-            dispatch_proposal = self.scheduled_dispatch_proposal(dt)
-            if self.controller.secondary_dispatch_schedule:
-                if dispatch_proposal.no_dispatch:
-                    dispatch_proposal = self.scheduled_secondary_dispatch_proposal(dt)
-            if self.controller.setpoints:
-                if dispatch_proposal.no_dispatch:
-                    demand_scenario = DemandScenario(
-                        demand[self.dispatch_on],
-                        dt,
-                        self.meter.tseries['balance_energy'].loc[dt]
-                    )
-                    dispatch_proposal = self.setpoint_dispatch_proposal(demand_scenario)
-            dispatch_proposal = self.apply_special_constraints(dispatch_proposal)
-            dispatch_proposal.validate()
-            dispatch = self.equipment.dispatch_request(dispatch_proposal, self.meter.sample_rate)
-            self.commit_dispatch(dt, dispatch, demand[self.dispatch_on])
-        self.meter.consolidate_updates(self.dispatch_on)
 
 
 @dataclass
@@ -186,7 +167,7 @@ class WholesalePriceTranchDispatcher(StorageDispatcher):
         pass
 
     @abstractmethod
-    def optimise_dispatch_params(
+    def schedule_dispatch_params(
             self,
             dt: datetime,
     ):

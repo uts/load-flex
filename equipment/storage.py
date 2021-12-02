@@ -48,12 +48,12 @@ class Battery(Storage):
         dispatch = Dispatch(
             charge=min(
                 proposal.charge,
-                self.charge_capacity * time_step_hours,
+                self.input_capacity * time_step_hours,
                 self.available_storage
             ),
             discharge=min(
                 proposal.discharge,
-                self.discharge_capacity * time_step_hours,
+                self.output_capacity * time_step_hours,
                 self.available_energy,
             )
         )
@@ -70,11 +70,11 @@ class ThermalStorage(Storage):
     report_on: Tuple[str] = field(default=THERMAL_REPORT_ON, init=False)
 
     @property
-    def discharge_capacity(self):
+    def output_capacity(self):
         return self.discharge_rate_model.calculate(self)
 
     @property
-    def charge_capacity(self):
+    def input_capacity(self):
         return self.charge_rate_model.calculate(self)
 
     @property
@@ -99,12 +99,12 @@ class ThermalStorage(Storage):
         dispatch = Dispatch(
             charge=min(
                 proposal.charge,
-                self.charge_capacity * time_step_hours,
+                self.input_capacity * time_step_hours,
                 self.available_storage
             ),
             discharge=min(
                 proposal.discharge,
-                self.discharge_capacity * time_step_hours,
+                self.output_capacity * time_step_hours,
                 self.available_energy,
             )
         )
