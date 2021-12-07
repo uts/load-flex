@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import timedelta, datetime
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Tuple
 from abc import abstractmethod
 
 import pandas as pd
@@ -62,7 +63,7 @@ class Converter:
     @staticmethod
     def power_meter_tseries_from_energy(
             energy_series: pd.Series,
-            power_factor_series: pd.Series,
+            power_factor: Union[float, np.ndarray, pd.Series],
             sample_rate: timedelta,
             subload_series: pd.Series = None
     ) -> pd.DataFrame:
@@ -74,9 +75,9 @@ class Converter:
         )
         df['demand_apparent'] = Converter.power_to_apparent(
             df['demand_power'],
-            power_factor_series
+            power_factor
         )
-        df['power_factor'] = power_factor_series
+        df['power_factor'] = power_factor
 
         return df
 
@@ -136,10 +137,14 @@ class PowerFlexMeter(DispatchFlexMeter):
         }
         self._reportables = []
 
-    def scale_meter_data(self, factor: float, exclude_cols: List[str] = None):
+    def scale_meter_data(
+            self,
+            factor: float,
+            exclude_cols: Tuple[str] = tuple(),
+    ):
         """ Multiply all .tseries cols by a common factor
         """
-        scale_cols = [col for col in self.tseries if col not in exclude_cols]
+        scale_cols = [col for col in self.tseries.columns if col not in exclude_cols]
         for col in scale_cols:
             self.tseries[col] *= factor
 
@@ -206,6 +211,37 @@ class PowerFlexMeter(DispatchFlexMeter):
 
     def reset_meter(self):
         self.__post_init__()
+
+    @classmethod
+    def from_energy_and_powerfactor(
+            cls,
+            name: str,
+            energy_meter: pd.Series,
+            power_factor: Union[float, np.ndarray, pd.Series],
+            sample_rate: timedelta,
+    ):
+        new_tseries = Converter.power_meter_tseries_from_energy(
+            energy_meter,
+            power_factor,
+            sample_rate,
+        )
+        new_tseries['generation_energy'] = 0.0
+
+        return cls(
+            name,
+            new_tseries,
+            sample_rate,
+            {
+                'demand_energy': 'kWh',
+                'demand_power': 'kW',
+                'generation_energy': 'kWh',
+                'power_factor': 'factor',
+                'demand_apparent': 'kVA',
+            },
+            []
+        )
+
+
 
 
 @dataclass
@@ -378,6 +414,9 @@ class ThermalLoadFlexMeter(DispatchFlexMeter):
 
 @dataclass
 class GasToElectricityFlexMeter(PowerFlexMeter):
+    """ Considers thermal gas load being replaced by dispatch of electrical thermal
+    equipment
+    """
     tseries: pd.DataFrame
     dispatch_tseries: pd.DataFrame = field(init=False)
     flexed_tseries: pd.DataFrame = field(init=False)
@@ -401,6 +440,32 @@ class GasToElectricityFlexMeter(PowerFlexMeter):
         }
         self._reportables = []
 
+    def consolidate_vector_updates(
+            self,
+            charge: pd.Series = pd.Series(),
+            discharge: pd.Series = pd.Series()
+    ):
+        concat_list = []
+        if not charge.empty:
+            concat_list.append(pd.DataFrame(charge, columns=['charge']))
+        if not discharge.empty:
+            concat_list.append(pd.DataFrame(discharge.to_numpy(), columns=['discharge'], index=discharge.index))
+        concat_list.append(self.dispatch_tseries)
+        self.dispatch_tseries = pd.concat(concat_list, axis=1)
+        if 'charge' not in self.dispatch_tseries.columns:
+            self.dispatch_tseries['charge'] = 0.0
+        if 'discharge' not in self.dispatch_tseries.columns:
+            self.dispatch_tseries['discharge'] = 0.0
+        self.dispatch_tseries['net'] = self.dispatch_tseries['discharge'] - self.dispatch_tseries['charge']
+
+    def consolidate_updates(self, dispatch_on: str):
+        self.dispatch_tseries['charge'] = self._updater_arrays['charge']
+        self.dispatch_tseries['discharge'] = self._updater_arrays['discharge']
+        self.dispatch_tseries['net'] = self._updater_arrays['net']
+        if self._reportables:
+            for key in self._reportables:
+                self.dispatch_tseries[key] = self._updater_arrays[key]
+
     def calculate_flexed_tseries(
             self,
             name,
@@ -408,7 +473,9 @@ class GasToElectricityFlexMeter(PowerFlexMeter):
     ):
         """
         """
-        self.flexed_tseries = self.dispatch_tseries['flexed_net_energy']
+
+        self.flexed_tseries['gas'] = self.tseries['gas'].values
+        self.flexed_tseries['gas'] -= self.dispatch_tseries['net']
 
         if return_new_meter:
             column_map = {
@@ -425,8 +492,11 @@ class GasToElectricityFlexMeter(PowerFlexMeter):
                 self.plot_configs
             )
 
-    def thermal_dispatch_to_electrical_load(
+    def thermal_dispatch_to_electrical_energy(
             self,
             coefficient_of_performance: Union[float, np.ndarray, pd.Series]
-    ) -> pd.DataFrame:
-        return self.dispatch_tseries[['net']] / coefficient_of_performance
+    ) -> pd.Series:
+        """ Return electrical energy equivalient of dispatch where negative values indicate
+        consumption
+        """
+        return self.dispatch_tseries['net'] / coefficient_of_performance

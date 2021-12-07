@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from datetime import timedelta
 
 from typing import List
@@ -142,13 +142,13 @@ class Equipment(ABC):
     def status(self) -> dict:
         return {x: getattr(self, x) for x in self.report_on}
 
-    @abstractmethod
     @property
+    @abstractmethod
     def input_capacity(self):
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def output_capacity(self):
         pass
 

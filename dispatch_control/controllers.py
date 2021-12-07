@@ -12,7 +12,6 @@ from time_series_tools.schedulers import Period
 class ParamController:
     setpoints: SetPoints = None
     primary_dispatch_schedule: EquipmentDispatchSchedule = None
-    secondary_dispatch_schedule: EquipmentDispatchSchedule = None
 
     @property
     def reportables(self):
@@ -39,14 +38,3 @@ class ParamController:
             charge_periods,
             discharge_periods
         )
-
-    def update_secondary_dispatch_schedule(
-            self,
-            charge_periods: List[Period],
-            discharge_periods: List[Period]
-    ):
-        self.secondary_dispatch_schedule.append_schedule(
-            charge_periods,
-            discharge_periods
-        )
-

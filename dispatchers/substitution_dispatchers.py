@@ -1,13 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import numpy as np
-from ts_tariffs.sites import MeterData
+import pandas as pd
 
-from dispatch_control.setpoints import DemandScenario
 from dispatchers.dispatchers import Dispatcher
-from equipment.heat_pumps import HeatingHeatPump
-from time_series_tools.metering import ThermalLoadFlexMeter, PowerFlexMeter
-from time_series_tools.schedulers import DateRangePeriod
+from equipment.heat_pumps import HeatPump
+from time_series_tools.metering import GasToElectricityFlexMeter
 from time_series_tools.wholesale_prices import MarketPrices
 
 
@@ -22,12 +20,11 @@ class ThermalSupply:
 
 
 @dataclass
-class HeatPumpDispatcher(Dispatcher):
-    equipment: HeatingHeatPump
-    meter: MeterData
+class HeatPumpWholesaleDispatcher(Dispatcher):
+    equipment: HeatPump
+    meter: GasToElectricityFlexMeter
     market_prices: MarketPrices
     base_supply: ThermalSupply
-    forecast_resolution: timedelta = timedelta(hours=0.5)
 
     @property
     def price_signal(self):
@@ -38,30 +35,41 @@ class HeatPumpDispatcher(Dispatcher):
             self.base_supply.dispatch_cost \
             * self.equipment.cop
 
-    def schedule_economic_dispatch(self, dt: datetime):
-        """ Identify times when market prices make heat pump more economical than
-        base thermal supply
+    def schedule_dispatch_params(
+            self,
+            dt: datetime,
+    ):
         """
-        price_forecast = self.market_prices.forecast(dt)
-        if self.meter.sample_rate != self.forecast_resolution:
-            price_forecast = price_forecast.resample(self.forecast_resolution).mean()
+        """
+        pass
 
-        # get list of dispatch datetimes
-        cost_effective_hp_times = price_forecast[price_forecast['price'] < self.price_signal].index
+    def dispatch(self):
 
-        # Where cost of heat pump is lower than gas, schedule dispatch
-        discharge_periods = list([
-            DateRangePeriod(x, x + self.forecast_resolution)
-            for x in cost_effective_hp_times
-        ])
-        self.controller.update_primary_dispatch_schedule(
-            [],
-            discharge_periods,
-            clean_slate=True
+        dispatch_proposal = np.where(
+            self.market_prices.tseries['price'] < self.price_signal,
+            self.equipment.max_dispatch(self.meter.sample_rate).discharge,
+            0.0
         )
+        dispatch = pd.Series(np.clip(dispatch_proposal, 0.0, self.meter.tseries[self.dispatch_on]))
+        self.meter.consolidate_vector_updates(discharge=dispatch)
+
+
+@dataclass
+class HeatPumpRetailDispatcher(Dispatcher):
+    equipment: HeatPump
+    meter: GasToElectricityFlexMeter
+    market_prices: MarketPrices
+    base_supply: ThermalSupply
 
     def schedule_dispatch_params(
             self,
             dt: datetime,
     ):
-        self.schedule_economic_dispatch(dt)
+        """
+        """
+        pass
+
+    def dispatch(self):
+        self.meter.consolidate_vector_updates(
+            discharge = self.meter.tseries[self.dispatch_on]
+        )

@@ -23,6 +23,9 @@ class Setting:
         """
         pass
 
+    @abstractmethod
+    def repay_dispatch(self, demand: float) -> Dispatch:
+        pass
 
 @dataclass
 class DispatchBlock(Dispatch):
@@ -68,3 +71,29 @@ class CompressorSuctionPressure(Setting):
         delta_energy = demand * self.low_pressure_load_factor
         return Dispatch(charge=-delta_energy, discharge=0.0)
 
+
+@dataclass
+class FanThrottle(Setting):
+    """ Throttle fan speed and estimate power savings via fan affinity laws
+
+    This does affect throughput and will change the cooling/freezing time required
+    for a given cooling cycle
+    """
+    throttle_rate: float
+    _last_borrowed_energy: float
+
+    @staticmethod
+    def power_consumption_ratio(throttle_rate):
+        """ Ratio of P2 / P1 when fan speed is throttled at
+        relative rate
+        Based on fan affinity laws
+        """
+        return 1.0 / (1 / (1.0 - throttle_rate))**3
+
+    def apply_setting(self, demand: float) -> Dispatch:
+        delta_energy = demand * (1 - self.power_consumption_ratio(self.throttle_rate))
+        self._last_borrowed_energy = delta_energy
+        return Dispatch(charge=0.0, discharge=delta_energy)
+
+    def repay_dispatch(self, demand: float) -> Dispatch:
+        return Dispatch(charge=self._last_borrowed_energy, discharge=0.0)
